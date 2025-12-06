@@ -75,7 +75,7 @@ fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>
     // egui_plotで折れ線グラフを表示
     Plot::new(plot_id)
         .height(80.0)
-        .width(200.0)
+        .width(180.0)
         .show_axes([false, true])
         .show_grid([true, true])
         .allow_zoom(false)
@@ -351,38 +351,35 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::AudioInputNode,
         ui: &mut Ui,
     ) {
-        ui.checkbox(&mut node.is_active, "Active");
-        if node.is_active {
-            ui.label(format!("{}ch", node.channels));
-        }
-
-        egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
-            .selected_text(node.device_name.as_str())
-            .width(150.0)
-            .show_ui(ui, |ui| {
-                for dev in &self.input_devices {
-                    ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut node.is_active, "Active");
+                if node.is_active {
+                    ui.label(format!("{}ch", node.channels));
                 }
             });
 
-        // スペクトラム表示（折りたたみ可能）
-        if node.is_active {
-            egui::CollapsingHeader::new("Spectrum")
-                .default_open(node.show_spectrum)
-                .show(ui, |ui| {
-                    node.show_spectrum = true;
+            egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
+                .selected_text(node.device_name.as_str())
+                .width(150.0)
+                .show_ui(ui, |ui| {
+                    for dev in &self.input_devices {
+                        ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+                    }
+                });
+
+            // スペクトラム表示（チェックボックスで切り替え）
+            if node.is_active {
+                ui.checkbox(&mut node.show_spectrum, "Spectrum");
+                if node.show_spectrum {
                     show_spectrum_line(
                         ui,
                         &format!("input_spectrum_{:?}", node_id),
                         &node.spectrum,
                     );
-                })
-                .header_response
-                .on_hover_text("Click to toggle spectrum");
-            if !ui.is_rect_visible(ui.min_rect()) {
-                node.show_spectrum = false;
+                }
             }
-        }
+        });
     }
 
     fn show_audio_output_body(
@@ -391,38 +388,35 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::AudioOutputNode,
         ui: &mut Ui,
     ) {
-        ui.checkbox(&mut node.is_active, "Active");
-        if node.is_active {
-            ui.label(format!("{}ch", node.channels));
-        }
-
-        egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
-            .selected_text(node.device_name.as_str())
-            .width(150.0)
-            .show_ui(ui, |ui| {
-                for dev in &self.output_devices {
-                    ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut node.is_active, "Active");
+                if node.is_active {
+                    ui.label(format!("{}ch", node.channels));
                 }
             });
 
-        // スペクトラム表示（折りたたみ可能）
-        if node.is_active {
-            egui::CollapsingHeader::new("Spectrum")
-                .default_open(node.show_spectrum)
-                .show(ui, |ui| {
-                    node.show_spectrum = true;
+            egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
+                .selected_text(node.device_name.as_str())
+                .width(150.0)
+                .show_ui(ui, |ui| {
+                    for dev in &self.output_devices {
+                        ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+                    }
+                });
+
+            // スペクトラム表示（チェックボックスで切り替え）
+            if node.is_active {
+                ui.checkbox(&mut node.show_spectrum, "Spectrum");
+                if node.show_spectrum {
                     show_spectrum_line(
                         ui,
                         &format!("output_spectrum_{:?}", node_id),
                         &node.spectrum,
                     );
-                })
-                .header_response
-                .on_hover_text("Click to toggle spectrum");
-            if !ui.is_rect_visible(ui.min_rect()) {
-                node.show_spectrum = false;
+                }
             }
-        }
+        });
     }
 
     fn show_gain_body(&self, _node_id: NodeId, node: &mut crate::nodes::GainNode, ui: &mut Ui) {
@@ -624,8 +618,7 @@ impl AudioGraphViewer {
                 .map(|i| {
                     let x = i as f64 / 100.0;
                     // 対数周波数スケールでスペクトラムインデックスを計算
-                    let freq_idx =
-                        (x.powf(2.0) * spectrum_len as f64) as usize;
+                    let freq_idx = (x.powf(2.0) * spectrum_len as f64) as usize;
                     let freq_idx = freq_idx.min(spectrum_len.saturating_sub(1));
 
                     let magnitude = if freq_idx < spectrum_data.len() {

@@ -59,7 +59,7 @@ impl AudioGraphProcessor {
     fn update_spectrum(&self, snarl: &mut Snarl<AudioNode>) {
         use crate::nodes::FFT_SIZE;
 
-        for (_, node) in snarl.nodes_ids_mut() {
+        for (node_id, node) in snarl.nodes_ids_mut() {
             match node {
                 AudioNode::AudioInput(input_node) => {
                     if input_node.is_active {
@@ -79,17 +79,21 @@ impl AudioGraphProcessor {
                 }
                 AudioNode::AudioOutput(output_node) => {
                     if output_node.is_active {
-                        // 最初のチャンネルからデータを取得してスペクトラム解析（常に更新）
-                        if let Some(buffer) = output_node.channel_buffers.first() {
-                            let mut samples = vec![0.0f32; FFT_SIZE];
-                            buffer.lock().peek(&mut samples);
+                        // アクティブノードからソースバッファを取得してスペクトラム解析
+                        if let Some(ActiveNodeState::Output(source_buffers)) =
+                            self.active_nodes.get(&node_id)
+                        {
+                            if let Some(buffer) = source_buffers.first() {
+                                let mut samples = vec![0.0f32; FFT_SIZE];
+                                buffer.lock().peek(&mut samples);
 
-                            let mut analyzer = output_node.analyzer.lock();
-                            analyzer.push_samples(&samples);
-                            let spectrum_data = analyzer.compute_spectrum();
+                                let mut analyzer = output_node.analyzer.lock();
+                                analyzer.push_samples(&samples);
+                                let spectrum_data = analyzer.compute_spectrum();
 
-                            let mut spectrum = output_node.spectrum.lock();
-                            spectrum.copy_from_slice(&spectrum_data);
+                                let mut spectrum = output_node.spectrum.lock();
+                                spectrum.copy_from_slice(&spectrum_data);
+                            }
                         }
                     }
                 }

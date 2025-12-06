@@ -44,6 +44,11 @@ src/
 - `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード（出力ピン = チャンネル数）
 - `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード（入力ピン = チャンネル数）
 - `Gain(GainNode)`: ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
+- `Add(AddNode)`: 加算ノード（2入力1出力、A + B）
+- `Multiply(MultiplyNode)`: 乗算ノード（2入力1出力、A × B、リングモジュレーション用）
+- `Filter(FilterNode)`: フィルターノード（1入力1出力、Low/High/Band Pass、カットオフ周波数、Q値）
+- `SpectrumAnalyzer(SpectrumAnalyzerNode)`: スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
+- `Compressor(CompressorNode)`: コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
 
 `delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
 新しいノードタイプを追加する際は：
@@ -93,19 +98,30 @@ egui-snarlのSnarlViewerトレイトを実装。
 3. `AudioOutput`ノード起動時、接続された入力ピンのチャンネルバッファを参照
 4. 出力コールバックで各チャンネルバッファから読み取り、インターリーブしてデバイスに出力
 
+## DSP処理 (dsp.rs)
+
+エフェクトノードのオーディオ処理アルゴリズムを実装：
+- `BiquadCoeffs`: Biquadフィルター係数（LowPass/HighPass/BandPass）
+- `BiquadState`: フィルター状態（1サンプル処理）
+- `CompressorParams`: コンプレッサーパラメータ
+- `CompressorState`: コンプレッサー状態（エンベロープフォロワー）
+- `SpectrumAnalyzer`: FFTベースのスペクトラム解析（Hann窓、1024点FFT）
+
 ## 依存ライブラリ
 
 - **eframe/egui**: GUIフレームワーク
 - **egui-snarl**: ノードグラフエディタ
+- **egui_plot**: プロット表示（スペクトラムアナライザー用）
 - **cpal**: クロスプラットフォームオーディオI/O
 - **parking_lot**: 高性能mutex実装
 - **ringbuf**: ロックフリーSPSCリングバッファ（パイプライン並列処理用）
 - **ndarray**: 将来的な信号処理用（現在未使用）
+- **rustfft**: FFT実装（スペクトラムアナライザー用）
 
 ## 今後の拡張予定
 
 - エフェクトノードのパイプライン処理統合
-- 音声エフェクトノード（フィルタ、ディレイ等）
 - ファイル入出力ノード
-- シグナルジェネレータノード
+- シグナルジェネレータノード（オシレーター）
+- ディレイ・リバーブノード
 - グラフの保存・読み込み

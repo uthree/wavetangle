@@ -18,24 +18,34 @@ src/
 
 ## 主要コンポーネント
 
+### RingBuffer (nodes.rs)
+音声データの低遅延転送用リングバッファ。
+- `write()`: データを書き込む
+- `read()`: データを読み込む（読み取り位置が進む）
+- `available()`: 利用可能なサンプル数
+
+### ChannelBuffer (nodes.rs)
+`Arc<Mutex<RingBuffer>>` - チャンネルごとの共有バッファ。
+
 ### NodeBehavior trait (nodes.rs)
 すべてのノードが実装するトレイト。共通インターフェースを定義：
 - `title()`: ノードのタイトル
 - `category()`: ノードのカテゴリ（Input/Output/Effect）
-- `input_count()`, `output_count()`: ピン数
+- `input_count()`, `output_count()`: ピン数（チャンネル数に連動）
 - `input_pin_type()`, `output_pin_type()`: ピンタイプ
-- `input_pin_name()`, `output_pin_name()`: ピン名
-- `buffer()`: オーディオバッファ
+- `input_pin_name()`, `output_pin_name()`: ピン名（L, R, C, LFE, SL, SR）
+- `channel_buffer()`: 指定チャンネルのバッファを取得
+- `channels()`, `set_channels()`: チャンネル数（ストリーム開始時に設定、ピン数も更新）
 - `is_active()`, `set_active()`: アクティブ状態
 
 ### AudioNode (nodes.rs)
 オーディオグラフのノードを表すenum。個別の構造体をラップ：
-- `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード
-- `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード
+- `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード（出力ピン = チャンネル数）
+- `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード（入力ピン = チャンネル数）
 
 `delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
 新しいノードタイプを追加する際は：
-1. 構造体を定義
+1. 構造体を定義（`channel_buffers: Vec<ChannelBuffer>`を含む）
 2. `NodeBehavior`トレイトを実装
 3. `AudioNode` enumにバリアントを追加
 4. マクロにバリアントを追加
@@ -48,27 +58,29 @@ src/
 ### AudioSystem (audio.rs)
 cpalを使用したオーディオデバイス管理システム。
 - デバイス列挙
-- 入力/出力ストリームの開始・停止
-- バッファを介したデータの受け渡し
+- 入力ストリーム：デバイスからデータを取得し、デインターリーブしてチャンネルバッファに書き込む
+- 出力ストリーム：チャンネルバッファから読み取り、インターリーブしてデバイスに出力
 - カスタムサンプルレート・バッファサイズの設定
 
 ### AudioGraphProcessor (graph.rs)
 オーディオグラフの接続を処理し、ノード間のデータルーティングを管理。
-- 接続されたノード間でバッファを共有
+- 出力ノード起動時に、接続された入力ノードのチャンネルバッファを直接参照
 - ストリームのライフサイクル管理
+- チャンネルごとの独立したルーティング
 
 ### AudioGraphViewer (viewer.rs)
 egui-snarlのSnarlViewerトレイトを実装。
 - ノードのUI表示
-- ピン接続のロジック
+- 動的なピン数（チャンネル数に応じて変化）
+- ピン接続のロジック（同じPinType同士のみ）
 - コンテキストメニュー（ノード追加・削除）
 
 ## データフロー
 
-1. `AudioInput`ノードがデバイスから音声データを取得
-2. データはArc<Mutex<Vec<f32>>>バッファに格納
-3. グラフ接続に基づき、データが接続先ノードにコピー
-4. `AudioOutput`ノードがバッファからデータを読み取り、デバイスに出力
+1. `AudioInput`ノードがデバイスからインターリーブされた音声データを取得
+2. データはチャンネルごとに分離され、各`ChannelBuffer`（リングバッファ）に書き込まれる
+3. `AudioOutput`ノード起動時、接続された入力ピンのチャンネルバッファを参照
+4. 出力コールバックで各チャンネルバッファから読み取り、インターリーブしてデバイスに出力
 
 ## 依存ライブラリ
 

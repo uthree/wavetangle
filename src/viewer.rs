@@ -214,7 +214,7 @@ impl AudioGraphViewer {
             }
 
             if node.is_active {
-                ui.label("Active");
+                ui.label(format!("{}ch", node.channels));
             }
         });
     }
@@ -245,7 +245,7 @@ impl AudioGraphViewer {
             }
 
             if node.is_active {
-                ui.label("Active");
+                ui.label(format!("{}ch", node.channels));
             }
         });
     }

@@ -2,8 +2,59 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-/// オーディオバッファ - ノード間でデータを共有するため
-pub type AudioBuffer = Arc<Mutex<Vec<f32>>>;
+/// リングバッファ - 音声データの低遅延転送用
+#[derive(Clone)]
+pub struct RingBuffer {
+    data: Vec<f32>,
+    write_pos: usize,
+    read_pos: usize,
+    capacity: usize,
+}
+
+impl RingBuffer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            data: vec![0.0; capacity],
+            write_pos: 0,
+            read_pos: 0,
+            capacity,
+        }
+    }
+
+    /// データを書き込む
+    pub fn write(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            self.data[self.write_pos] = sample;
+            self.write_pos = (self.write_pos + 1) % self.capacity;
+        }
+    }
+
+    /// データを読み込む（読み込んだ分だけ進む）
+    pub fn read(&mut self, output: &mut [f32]) {
+        for sample in output.iter_mut() {
+            *sample = self.data[self.read_pos];
+            self.read_pos = (self.read_pos + 1) % self.capacity;
+        }
+    }
+
+    /// 利用可能なサンプル数
+    #[allow(dead_code)]
+    pub fn available(&self) -> usize {
+        if self.write_pos >= self.read_pos {
+            self.write_pos - self.read_pos
+        } else {
+            self.capacity - self.read_pos + self.write_pos
+        }
+    }
+}
+
+/// チャンネルバッファ - 1チャンネル分のリングバッファ
+pub type ChannelBuffer = Arc<Mutex<RingBuffer>>;
+
+/// 新しいチャンネルバッファを作成
+pub fn new_channel_buffer(capacity: usize) -> ChannelBuffer {
+    Arc::new(Mutex::new(RingBuffer::new(capacity)))
+}
 
 /// ノードのピンタイプ
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -47,8 +98,14 @@ pub trait NodeBehavior {
     /// 出力ピンの名前
     fn output_pin_name(&self, index: usize) -> Option<&str>;
 
-    /// オーディオバッファへの参照（あれば）
-    fn buffer(&self) -> Option<&AudioBuffer>;
+    /// 指定チャンネルのバッファを取得
+    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer>;
+
+    /// オーディオチャンネル数を取得
+    fn channels(&self) -> u16;
+
+    /// オーディオチャンネル数を設定（バッファも再作成）
+    fn set_channels(&mut self, channels: u16);
 
     /// アクティブ状態を取得
     fn is_active(&self) -> bool;
@@ -56,6 +113,9 @@ pub trait NodeBehavior {
     /// アクティブ状態を設定
     fn set_active(&mut self, active: bool);
 }
+
+/// デフォルトのリングバッファサイズ（サンプル数）
+pub const DEFAULT_RING_BUFFER_SIZE: usize = 8192;
 
 // ============================================================================
 // Audio Input Node
@@ -65,17 +125,32 @@ pub trait NodeBehavior {
 #[derive(Clone)]
 pub struct AudioInputNode {
     pub device_name: String,
-    pub buffer: AudioBuffer,
+    /// チャンネルごとのバッファ
+    pub channel_buffers: Vec<ChannelBuffer>,
+    pub channels: u16,
     pub is_active: bool,
 }
 
 impl AudioInputNode {
     pub fn new(device_name: String) -> Self {
+        let channels = 2u16; // デフォルトはステレオ
+        let channel_buffers = (0..channels)
+            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
+            .collect();
         Self {
             device_name,
-            buffer: Arc::new(Mutex::new(Vec::new())),
+            channel_buffers,
+            channels,
             is_active: false,
         }
+    }
+
+    /// チャンネル数に合わせてバッファを再作成
+    pub fn resize_buffers(&mut self, channels: u16) {
+        self.channels = channels;
+        self.channel_buffers = (0..channels)
+            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
+            .collect();
     }
 }
 
@@ -93,7 +168,7 @@ impl NodeBehavior for AudioInputNode {
     }
 
     fn output_count(&self) -> usize {
-        1
+        self.channels as usize
     }
 
     fn input_pin_type(&self, _index: usize) -> Option<PinType> {
@@ -101,7 +176,7 @@ impl NodeBehavior for AudioInputNode {
     }
 
     fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
+        if index < self.channels as usize {
             Some(PinType::Audio)
         } else {
             None
@@ -113,15 +188,27 @@ impl NodeBehavior for AudioInputNode {
     }
 
     fn output_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("Out")
-        } else {
-            None
+        match index {
+            0 => Some("L"),
+            1 => Some("R"),
+            2 => Some("C"),
+            3 => Some("LFE"),
+            4 => Some("SL"),
+            5 => Some("SR"),
+            _ => None,
         }
     }
 
-    fn buffer(&self) -> Option<&AudioBuffer> {
-        Some(&self.buffer)
+    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+        self.channel_buffers.get(channel).cloned()
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn set_channels(&mut self, channels: u16) {
+        self.resize_buffers(channels);
     }
 
     fn is_active(&self) -> bool {
@@ -141,17 +228,32 @@ impl NodeBehavior for AudioInputNode {
 #[derive(Clone)]
 pub struct AudioOutputNode {
     pub device_name: String,
-    pub buffer: AudioBuffer,
+    /// チャンネルごとのバッファ
+    pub channel_buffers: Vec<ChannelBuffer>,
+    pub channels: u16,
     pub is_active: bool,
 }
 
 impl AudioOutputNode {
     pub fn new(device_name: String) -> Self {
+        let channels = 2u16; // デフォルトはステレオ
+        let channel_buffers = (0..channels)
+            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
+            .collect();
         Self {
             device_name,
-            buffer: Arc::new(Mutex::new(Vec::new())),
+            channel_buffers,
+            channels,
             is_active: false,
         }
+    }
+
+    /// チャンネル数に合わせてバッファを再作成
+    pub fn resize_buffers(&mut self, channels: u16) {
+        self.channels = channels;
+        self.channel_buffers = (0..channels)
+            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
+            .collect();
     }
 }
 
@@ -165,7 +267,7 @@ impl NodeBehavior for AudioOutputNode {
     }
 
     fn input_count(&self) -> usize {
-        1
+        self.channels as usize
     }
 
     fn output_count(&self) -> usize {
@@ -173,7 +275,7 @@ impl NodeBehavior for AudioOutputNode {
     }
 
     fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
+        if index < self.channels as usize {
             Some(PinType::Audio)
         } else {
             None
@@ -185,10 +287,14 @@ impl NodeBehavior for AudioOutputNode {
     }
 
     fn input_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("In")
-        } else {
-            None
+        match index {
+            0 => Some("L"),
+            1 => Some("R"),
+            2 => Some("C"),
+            3 => Some("LFE"),
+            4 => Some("SL"),
+            5 => Some("SR"),
+            _ => None,
         }
     }
 
@@ -196,8 +302,16 @@ impl NodeBehavior for AudioOutputNode {
         None
     }
 
-    fn buffer(&self) -> Option<&AudioBuffer> {
-        Some(&self.buffer)
+    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+        self.channel_buffers.get(channel).cloned()
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn set_channels(&mut self, channels: u16) {
+        self.resize_buffers(channels);
     }
 
     fn is_active(&self) -> bool {
@@ -263,8 +377,19 @@ impl NodeBehavior for AudioNode {
         delegate_node_behavior!(self, output_pin_name, index)
     }
 
-    fn buffer(&self) -> Option<&AudioBuffer> {
-        delegate_node_behavior!(self, buffer)
+    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+        delegate_node_behavior!(self, channel_buffer, channel)
+    }
+
+    fn channels(&self) -> u16 {
+        delegate_node_behavior!(self, channels)
+    }
+
+    fn set_channels(&mut self, channels: u16) {
+        match self {
+            AudioNode::AudioInput(node) => node.set_channels(channels),
+            AudioNode::AudioOutput(node) => node.set_channels(channels),
+        }
     }
 
     fn is_active(&self) -> bool {

@@ -1,10 +1,7 @@
-use std::sync::Arc;
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Host, SampleRate, Stream, StreamConfig};
-use parking_lot::Mutex;
 
-use crate::nodes::AudioBuffer;
+use crate::nodes::ChannelBuffer;
 
 /// 一般的なサンプルレートの選択肢
 pub const SAMPLE_RATES: &[u32] = &[22050, 44100, 48000, 88200, 96000, 192000];
@@ -33,8 +30,6 @@ pub struct AudioSystem {
     host: Host,
     input_stream: Option<Stream>,
     output_stream: Option<Stream>,
-    input_buffer: AudioBuffer,
-    output_buffer: AudioBuffer,
     config: AudioConfig,
 }
 
@@ -45,8 +40,6 @@ impl AudioSystem {
             host,
             input_stream: None,
             output_stream: None,
-            input_buffer: Arc::new(Mutex::new(Vec::new())),
-            output_buffer: Arc::new(Mutex::new(Vec::new())),
             config: AudioConfig::default(),
         }
     }
@@ -111,23 +104,38 @@ impl AudioSystem {
         })
     }
 
-    /// 入力ストリームを開始
-    pub fn start_input(&mut self, device_name: &str, buffer: AudioBuffer) -> Result<(), String> {
+    /// 入力ストリームを開始し、チャンネル数を返す
+    /// channel_buffers: チャンネルごとのリングバッファ
+    pub fn start_input(
+        &mut self,
+        device_name: &str,
+        channel_buffers: Vec<ChannelBuffer>,
+    ) -> Result<u16, String> {
         let device = self
             .get_input_device(device_name)
             .ok_or_else(|| format!("Input device '{}' not found", device_name))?;
 
         let stream_config = self.build_stream_config(&device, true)?;
-        self.input_buffer = buffer.clone();
+        let channels = stream_config.channels;
 
-        let buffer_clone = buffer;
         let stream = device
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let mut buf = buffer_clone.lock();
-                    buf.clear();
-                    buf.extend_from_slice(data);
+                    let num_channels = channel_buffers.len();
+                    if num_channels == 0 {
+                        return;
+                    }
+
+                    // インターリーブされたデータをチャンネルごとに分離
+                    let frame_count = data.len() / channels as usize;
+                    for ch in 0..num_channels.min(channels as usize) {
+                        let mut buf = channel_buffers[ch].lock();
+                        let samples: Vec<f32> = (0..frame_count)
+                            .map(|frame| data[frame * channels as usize + ch])
+                            .collect();
+                        buf.write(&samples);
+                    }
                 },
                 |err| eprintln!("Input stream error: {}", err),
                 None,
@@ -138,26 +146,48 @@ impl AudioSystem {
             .play()
             .map_err(|e| format!("Failed to play input stream: {}", e))?;
         self.input_stream = Some(stream);
-        Ok(())
+        Ok(channels)
     }
 
-    /// 出力ストリームを開始
-    pub fn start_output(&mut self, device_name: &str, buffer: AudioBuffer) -> Result<(), String> {
+    /// 出力ストリームを開始し、チャンネル数を返す
+    /// channel_buffers: チャンネルごとのリングバッファ
+    pub fn start_output(
+        &mut self,
+        device_name: &str,
+        channel_buffers: Vec<ChannelBuffer>,
+    ) -> Result<u16, String> {
         let device = self
             .get_output_device(device_name)
             .ok_or_else(|| format!("Output device '{}' not found", device_name))?;
 
         let stream_config = self.build_stream_config(&device, false)?;
-        self.output_buffer = buffer.clone();
+        let channels = stream_config.channels;
 
-        let buffer_clone = buffer;
         let stream = device
             .build_output_stream(
                 &stream_config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    let buf = buffer_clone.lock();
-                    for (i, sample) in data.iter_mut().enumerate() {
-                        *sample = buf.get(i % buf.len().max(1)).copied().unwrap_or(0.0);
+                    let num_channels = channel_buffers.len();
+                    if num_channels == 0 {
+                        data.fill(0.0);
+                        return;
+                    }
+
+                    let frame_count = data.len() / channels as usize;
+
+                    // 各チャンネルからデータを読み取ってインターリーブ
+                    for ch in 0..channels as usize {
+                        let source_ch = ch.min(num_channels - 1);
+                        let mut buf = channel_buffers[source_ch].lock();
+
+                        // 一時バッファに読み取り
+                        let mut temp = vec![0.0f32; frame_count];
+                        buf.read(&mut temp);
+
+                        // インターリーブして出力
+                        for (frame, &sample) in temp.iter().enumerate() {
+                            data[frame * channels as usize + ch] = sample;
+                        }
                     }
                 },
                 |err| eprintln!("Output stream error: {}", err),
@@ -169,7 +199,7 @@ impl AudioSystem {
             .play()
             .map_err(|e| format!("Failed to play output stream: {}", e))?;
         self.output_stream = Some(stream);
-        Ok(())
+        Ok(channels)
     }
 
     /// 入力ストリームを停止
@@ -180,18 +210,6 @@ impl AudioSystem {
     /// 出力ストリームを停止
     pub fn stop_output(&mut self) {
         self.output_stream = None;
-    }
-
-    /// 入力バッファへの参照を取得
-    #[allow(dead_code)]
-    pub fn input_buffer(&self) -> &AudioBuffer {
-        &self.input_buffer
-    }
-
-    /// 出力バッファへの参照を取得
-    #[allow(dead_code)]
-    pub fn output_buffer(&self) -> &AudioBuffer {
-        &self.output_buffer
     }
 }
 

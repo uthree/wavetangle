@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use egui_snarl::{InPinId, NodeId, OutPinId, Snarl};
 
@@ -6,10 +7,18 @@ use crate::audio::AudioSystem;
 use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
 use crate::nodes::{AudioNode, ChannelBuffer, NodeBehavior};
 
+/// アクティブノードの状態
+enum ActiveNodeState {
+    /// 入力ノード
+    Input,
+    /// 出力ノード（接続されているバッファの参照を保持）
+    Output(Vec<ChannelBuffer>),
+}
+
 /// オーディオグラフの処理を管理
 pub struct AudioGraphProcessor {
-    /// アクティブなノードのIDセット
-    active_nodes: HashMap<NodeId, ()>,
+    /// アクティブなノードの状態
+    active_nodes: HashMap<NodeId, ActiveNodeState>,
     /// サンプルレート
     sample_rate: f32,
     /// エフェクトプロセッサー
@@ -227,6 +236,14 @@ impl AudioGraphProcessor {
         })
     }
 
+    /// バッファ参照が同じかチェック（Arc::ptr_eq で比較）
+    fn buffers_equal(a: &[ChannelBuffer], b: &[ChannelBuffer]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        a.iter().zip(b.iter()).all(|(a, b)| Arc::ptr_eq(a, b))
+    }
+
     /// ストリームの開始/停止を管理
     fn manage_streams(&mut self, snarl: &mut Snarl<AudioNode>, audio_system: &mut AudioSystem) {
         // まず、状態変更が必要なノードを収集
@@ -234,6 +251,8 @@ impl AudioGraphProcessor {
         let mut to_stop_input: Vec<NodeId> = Vec::new();
         let mut to_start_output: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
         let mut to_stop_output: Vec<NodeId> = Vec::new();
+        // 接続変更によりストリームを再起動するノード
+        let mut to_restart_output: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
 
         for (node_id, node) in snarl.node_ids() {
             match node {
@@ -255,6 +274,22 @@ impl AudioGraphProcessor {
                         to_start_output.push((node_id, output_node.device_name.clone(), buffers));
                     } else if !output_node.is_active && self.active_nodes.contains_key(&node_id) {
                         to_stop_output.push(node_id);
+                    } else if output_node.is_active && self.active_nodes.contains_key(&node_id) {
+                        // アクティブな出力ノードの接続が変わったかチェック
+                        let current_buffers =
+                            self.collect_output_buffers(snarl, node_id, output_node);
+                        if let Some(ActiveNodeState::Output(stored_buffers)) =
+                            self.active_nodes.get(&node_id)
+                        {
+                            if !Self::buffers_equal(stored_buffers, &current_buffers) {
+                                // バッファが変わった場合、ストリームを再起動
+                                to_restart_output.push((
+                                    node_id,
+                                    output_node.device_name.clone(),
+                                    current_buffers,
+                                ));
+                            }
+                        }
                     }
                 }
                 AudioNode::Gain(_)
@@ -277,7 +312,7 @@ impl AudioGraphProcessor {
                     if let Some(node) = snarl.get_node_mut(node_id) {
                         node.set_channels(channels);
                     }
-                    self.active_nodes.insert(node_id, ());
+                    self.active_nodes.insert(node_id, ActiveNodeState::Input);
                 }
                 Err(e) => {
                     eprintln!("Failed to start input: {}", e);
@@ -294,12 +329,13 @@ impl AudioGraphProcessor {
         }
 
         for (node_id, device_name, buffers) in to_start_output {
-            match audio_system.start_output(&device_name, buffers) {
+            match audio_system.start_output(&device_name, buffers.clone()) {
                 Ok(channels) => {
                     if let Some(node) = snarl.get_node_mut(node_id) {
                         node.set_channels(channels);
                     }
-                    self.active_nodes.insert(node_id, ());
+                    self.active_nodes
+                        .insert(node_id, ActiveNodeState::Output(buffers));
                 }
                 Err(e) => {
                     eprintln!("Failed to start output: {}", e);
@@ -313,6 +349,28 @@ impl AudioGraphProcessor {
         for node_id in to_stop_output {
             audio_system.stop_output();
             self.active_nodes.remove(&node_id);
+        }
+
+        // 接続変更により再起動が必要な出力ノード
+        for (node_id, device_name, buffers) in to_restart_output {
+            // 一旦停止してから再起動
+            audio_system.stop_output();
+            match audio_system.start_output(&device_name, buffers.clone()) {
+                Ok(channels) => {
+                    if let Some(node) = snarl.get_node_mut(node_id) {
+                        node.set_channels(channels);
+                    }
+                    self.active_nodes
+                        .insert(node_id, ActiveNodeState::Output(buffers));
+                }
+                Err(e) => {
+                    eprintln!("Failed to restart output: {}", e);
+                    self.active_nodes.remove(&node_id);
+                    if let Some(node) = snarl.get_node_mut(node_id) {
+                        node.set_active(false);
+                    }
+                }
+            }
         }
     }
 

@@ -274,6 +274,13 @@ impl SpectrumAnalyzer {
         self.write_pos = (self.write_pos + 1) % FFT_SIZE;
     }
 
+    /// 複数サンプルを追加
+    pub fn push_samples(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            self.push_sample(sample);
+        }
+    }
+
     /// スペクトラムを計算してマグニチュード（スムージング済み）を返す
     pub fn compute_spectrum(&mut self) -> Vec<f32> {
         // 窓関数を適用してFFT入力を準備
@@ -529,6 +536,8 @@ pub struct GraphicEq {
     sample_rate: f32,
     /// 処理済みサンプル数
     samples_since_fft: usize,
+    /// 入力スペクトラム（マグニチュード）
+    input_spectrum: Vec<f32>,
 }
 
 impl GraphicEq {
@@ -560,6 +569,7 @@ impl GraphicEq {
             freq_gains,
             sample_rate,
             samples_since_fft: 0,
+            input_spectrum: vec![0.0; EQ_FFT_SIZE / 2],
         }
     }
 
@@ -642,6 +652,11 @@ impl GraphicEq {
         // FFT
         self.fft.process(&mut self.fft_buffer);
 
+        // 入力スペクトラムを保存（ゲイン適用前）
+        for i in 0..EQ_FFT_SIZE / 2 {
+            self.input_spectrum[i] = self.fft_buffer[i].norm();
+        }
+
         // 周波数領域でゲイン適用
         let bin_count = EQ_FFT_SIZE / 2 + 1;
         for bin in 0..bin_count {
@@ -673,6 +688,11 @@ impl GraphicEq {
         self.input_pos = 0;
         self.output_pos = 0;
         self.samples_since_fft = 0;
+    }
+
+    /// 入力スペクトラムを取得
+    pub fn get_input_spectrum(&self) -> &[f32] {
+        &self.input_spectrum
     }
 }
 

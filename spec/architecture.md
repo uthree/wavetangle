@@ -44,8 +44,8 @@ src/
 
 ### AudioNode (nodes.rs)
 オーディオグラフのノードを表すenum。個別の構造体をラップ：
-- `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード（出力ピン = チャンネル数）
-- `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード（入力ピン = チャンネル数）
+- `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード（出力ピン = チャンネル数、スペクトラム表示統合）
+- `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード（入力ピン = チャンネル数、スペクトラム表示統合）
 - `Gain(GainNode)`: ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
 - `Add(AddNode)`: 加算ノード（2入力1出力、A + B）
 - `Multiply(MultiplyNode)`: 乗算ノード（2入力1出力、A × B、リングモジュレーション用）
@@ -53,7 +53,7 @@ src/
 - `SpectrumAnalyzer(SpectrumAnalyzerNode)`: スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
 - `Compressor(CompressorNode)`: コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
 - `PitchShift(PitchShiftNode)`: ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
-- `GraphicEq(GraphicEqNode)`: グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI）
+- `GraphicEq(GraphicEqNode)`: グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
 
 `delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
 新しいノードタイプを追加する際は：

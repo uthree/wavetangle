@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use egui::{Color32, Ui};
 use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, Points};
 use egui_snarl::ui::{PinInfo, SnarlPin, SnarlViewer};
 use egui_snarl::{InPin, NodeId, OutPin, Snarl};
+use parking_lot::Mutex;
 
 use crate::dsp::EqPoint;
 use crate::nodes::{AudioNode, FilterType, NodeBehavior, PinType, FFT_SIZE};
@@ -33,6 +36,62 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
         ((g + m) * 255.0) as u8,
         ((b + m) * 255.0) as u8,
     )
+}
+
+/// スペクトラムを折れ線グラフで表示
+fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>>) {
+    let spectrum_data = spectrum.lock();
+    let point_count = 100;
+    let spectrum_len = spectrum_data.len();
+
+    // ラインデータを作成
+    let points: Vec<[f64; 2]> = (0..point_count)
+        .map(|i| {
+            let x = i as f64 / point_count as f64;
+            // 対数スケールでインデックスをマッピング（低周波を細かく表示）
+            let freq_idx = (x.powf(2.0) * spectrum_len as f64) as usize;
+            let freq_idx = freq_idx.min(spectrum_len.saturating_sub(1));
+
+            // マグニチュードを正規化（対数スケール、dB変換）
+            let magnitude = if freq_idx < spectrum_data.len() {
+                spectrum_data[freq_idx]
+            } else {
+                0.0
+            };
+            let db = if magnitude > 1e-6 {
+                20.0 * (magnitude as f64).log10()
+            } else {
+                -80.0
+            };
+            // -80dB〜0dBを0.0〜1.0にマッピング
+            let normalized = ((db + 80.0) / 80.0).clamp(0.0, 1.0);
+
+            [x, normalized]
+        })
+        .collect();
+
+    drop(spectrum_data); // ロックを解放
+
+    // egui_plotで折れ線グラフを表示
+    Plot::new(plot_id)
+        .height(80.0)
+        .width(200.0)
+        .show_axes([false, true])
+        .show_grid([true, true])
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_scroll(false)
+        .include_x(0.0)
+        .include_x(1.0)
+        .include_y(0.0)
+        .include_y(1.0)
+        .show(ui, |plot_ui| {
+            plot_ui.line(
+                Line::new("spectrum", PlotPoints::from(points))
+                    .color(Color32::from_rgb(100, 200, 100))
+                    .width(1.5),
+            );
+        });
 }
 
 /// オーディオグラフビューアー
@@ -292,23 +351,38 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::AudioInputNode,
         ui: &mut Ui,
     ) {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut node.is_active, "Active");
-            if node.is_active {
-                ui.label(format!("{}ch", node.channels));
-            }
-        });
+        ui.checkbox(&mut node.is_active, "Active");
+        if node.is_active {
+            ui.label(format!("{}ch", node.channels));
+        }
 
-        ui.horizontal(|ui| {
-            ui.label("Device:");
-            egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
-                .selected_text(node.device_name.as_str())
-                .show_ui(ui, |ui| {
-                    for dev in &self.input_devices {
-                        ui.selectable_value(&mut node.device_name, dev.clone(), dev);
-                    }
-                });
-        });
+        egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
+            .selected_text(node.device_name.as_str())
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for dev in &self.input_devices {
+                    ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+                }
+            });
+
+        // スペクトラム表示（折りたたみ可能）
+        if node.is_active {
+            egui::CollapsingHeader::new("Spectrum")
+                .default_open(node.show_spectrum)
+                .show(ui, |ui| {
+                    node.show_spectrum = true;
+                    show_spectrum_line(
+                        ui,
+                        &format!("input_spectrum_{:?}", node_id),
+                        &node.spectrum,
+                    );
+                })
+                .header_response
+                .on_hover_text("Click to toggle spectrum");
+            if !ui.is_rect_visible(ui.min_rect()) {
+                node.show_spectrum = false;
+            }
+        }
     }
 
     fn show_audio_output_body(
@@ -317,30 +391,43 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::AudioOutputNode,
         ui: &mut Ui,
     ) {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut node.is_active, "Active");
-            if node.is_active {
-                ui.label(format!("{}ch", node.channels));
-            }
-        });
+        ui.checkbox(&mut node.is_active, "Active");
+        if node.is_active {
+            ui.label(format!("{}ch", node.channels));
+        }
 
-        ui.horizontal(|ui| {
-            ui.label("Device:");
-            egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
-                .selected_text(node.device_name.as_str())
-                .show_ui(ui, |ui| {
-                    for dev in &self.output_devices {
-                        ui.selectable_value(&mut node.device_name, dev.clone(), dev);
-                    }
-                });
-        });
+        egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
+            .selected_text(node.device_name.as_str())
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for dev in &self.output_devices {
+                    ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+                }
+            });
+
+        // スペクトラム表示（折りたたみ可能）
+        if node.is_active {
+            egui::CollapsingHeader::new("Spectrum")
+                .default_open(node.show_spectrum)
+                .show(ui, |ui| {
+                    node.show_spectrum = true;
+                    show_spectrum_line(
+                        ui,
+                        &format!("output_spectrum_{:?}", node_id),
+                        &node.spectrum,
+                    );
+                })
+                .header_response
+                .on_hover_text("Click to toggle spectrum");
+            if !ui.is_rect_visible(ui.min_rect()) {
+                node.show_spectrum = false;
+            }
+        }
     }
 
     fn show_gain_body(&self, _node_id: NodeId, node: &mut crate::nodes::GainNode, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Gain:");
-            ui.add(egui::Slider::new(&mut node.gain, 0.0..=2.0).suffix("x"));
-        });
+        ui.label("Gain:");
+        ui.add(egui::Slider::new(&mut node.gain, 0.0..=2.0).suffix("x"));
 
         // dB表示
         let db = 20.0 * node.gain.log10();
@@ -365,34 +452,28 @@ impl AudioGraphViewer {
     }
 
     fn show_filter_body(&self, node_id: NodeId, node: &mut crate::nodes::FilterNode, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Type:");
-            egui::ComboBox::from_id_salt(format!("filter_type_{:?}", node_id))
-                .selected_text(match node.filter_type {
-                    FilterType::Low => "Low Pass",
-                    FilterType::High => "High Pass",
-                    FilterType::Band => "Band Pass",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut node.filter_type, FilterType::Low, "Low Pass");
-                    ui.selectable_value(&mut node.filter_type, FilterType::High, "High Pass");
-                    ui.selectable_value(&mut node.filter_type, FilterType::Band, "Band Pass");
-                });
-        });
+        ui.label("Type:");
+        egui::ComboBox::from_id_salt(format!("filter_type_{:?}", node_id))
+            .selected_text(match node.filter_type {
+                FilterType::Low => "Low Pass",
+                FilterType::High => "High Pass",
+                FilterType::Band => "Band Pass",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut node.filter_type, FilterType::Low, "Low Pass");
+                ui.selectable_value(&mut node.filter_type, FilterType::High, "High Pass");
+                ui.selectable_value(&mut node.filter_type, FilterType::Band, "Band Pass");
+            });
 
-        ui.horizontal(|ui| {
-            ui.label("Cutoff:");
-            ui.add(
-                egui::Slider::new(&mut node.cutoff, 20.0..=20000.0)
-                    .logarithmic(true)
-                    .suffix(" Hz"),
-            );
-        });
+        ui.label("Cutoff:");
+        ui.add(
+            egui::Slider::new(&mut node.cutoff, 20.0..=20000.0)
+                .logarithmic(true)
+                .suffix(" Hz"),
+        );
 
-        ui.horizontal(|ui| {
-            ui.label("Q:");
-            ui.add(egui::Slider::new(&mut node.resonance, 0.1..=10.0));
-        });
+        ui.label("Q:");
+        ui.add(egui::Slider::new(&mut node.resonance, 0.1..=10.0));
     }
 
     fn show_spectrum_body(
@@ -462,30 +543,20 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::CompressorNode,
         ui: &mut Ui,
     ) {
-        ui.horizontal(|ui| {
-            ui.label("Threshold:");
-            ui.add(egui::Slider::new(&mut node.threshold, -60.0..=0.0).suffix(" dB"));
-        });
+        ui.label("Threshold:");
+        ui.add(egui::Slider::new(&mut node.threshold, -60.0..=0.0).suffix(" dB"));
 
-        ui.horizontal(|ui| {
-            ui.label("Ratio:");
-            ui.add(egui::Slider::new(&mut node.ratio, 1.0..=20.0).suffix(":1"));
-        });
+        ui.label("Ratio:");
+        ui.add(egui::Slider::new(&mut node.ratio, 1.0..=20.0).suffix(":1"));
 
-        ui.horizontal(|ui| {
-            ui.label("Attack:");
-            ui.add(egui::Slider::new(&mut node.attack, 0.1..=100.0).suffix(" ms"));
-        });
+        ui.label("Attack:");
+        ui.add(egui::Slider::new(&mut node.attack, 0.1..=100.0).suffix(" ms"));
 
-        ui.horizontal(|ui| {
-            ui.label("Release:");
-            ui.add(egui::Slider::new(&mut node.release, 10.0..=1000.0).suffix(" ms"));
-        });
+        ui.label("Release:");
+        ui.add(egui::Slider::new(&mut node.release, 10.0..=1000.0).suffix(" ms"));
 
-        ui.horizontal(|ui| {
-            ui.label("Makeup:");
-            ui.add(egui::Slider::new(&mut node.makeup_gain, 0.0..=24.0).suffix(" dB"));
-        });
+        ui.label("Makeup:");
+        ui.add(egui::Slider::new(&mut node.makeup_gain, 0.0..=24.0).suffix(" dB"));
     }
 
     fn show_pitch_shift_body(
@@ -494,10 +565,8 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::PitchShiftNode,
         ui: &mut Ui,
     ) {
-        ui.horizontal(|ui| {
-            ui.label("Semitones:");
-            ui.add(egui::Slider::new(&mut node.semitones, -12.0..=12.0).suffix(" st"));
-        });
+        ui.label("Semitones:");
+        ui.add(egui::Slider::new(&mut node.semitones, -12.0..=12.0).suffix(" st"));
 
         // セント表示
         let cents = (node.semitones.fract() * 100.0).round() as i32;
@@ -515,6 +584,9 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::GraphicEqNode,
         ui: &mut Ui,
     ) {
+        // スペクトラム表示トグル
+        ui.checkbox(&mut node.show_spectrum, "Show Spectrum");
+
         // 周波数範囲
         const MIN_FREQ: f64 = 20.0;
         const MAX_FREQ: f64 = 20000.0;
@@ -544,6 +616,41 @@ impl AudioGraphViewer {
             .map(|p| [freq_to_x(p.freq as f64), p.gain_db as f64])
             .collect();
 
+        // スペクトラムデータを取得してプロット座標に変換
+        let spectrum_points: Vec<[f64; 2]> = if node.show_spectrum {
+            let spectrum_data = node.spectrum.lock();
+            let spectrum_len = spectrum_data.len();
+            (0..100)
+                .map(|i| {
+                    let x = i as f64 / 100.0;
+                    // 対数周波数スケールでスペクトラムインデックスを計算
+                    let freq_idx =
+                        (x.powf(2.0) * spectrum_len as f64) as usize;
+                    let freq_idx = freq_idx.min(spectrum_len.saturating_sub(1));
+
+                    let magnitude = if freq_idx < spectrum_data.len() {
+                        spectrum_data[freq_idx]
+                    } else {
+                        0.0
+                    };
+
+                    // dBに変換（-80dB〜0dBを-24〜+24dBにマッピング）
+                    let db = if magnitude > 1e-6 {
+                        20.0 * (magnitude as f64).log10()
+                    } else {
+                        -80.0
+                    };
+                    // -80dB〜0dBを-24〜+24dBにスケール
+                    let scaled_db = (db + 80.0) / 80.0 * 48.0 - 24.0;
+                    let clamped_db = scaled_db.clamp(MIN_GAIN, MAX_GAIN);
+
+                    [x, clamped_db]
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         // プロット表示
         let plot_response = Plot::new(format!("graphic_eq_{:?}", node_id))
             .height(150.0)
@@ -561,6 +668,15 @@ impl AudioGraphViewer {
             .x_axis_label("Freq")
             .y_axis_label("dB")
             .show(ui, |plot_ui| {
+                // スペクトラム（背景として表示）
+                if node.show_spectrum && !spectrum_points.is_empty() {
+                    plot_ui.line(
+                        Line::new("spectrum", PlotPoints::from(spectrum_points.clone()))
+                            .color(Color32::from_rgb(100, 200, 100))
+                            .width(1.5),
+                    );
+                }
+
                 // 0dBライン
                 plot_ui.line(
                     Line::new("zero", PlotPoints::from(vec![[0.0, 0.0], [1.0, 0.0]]))

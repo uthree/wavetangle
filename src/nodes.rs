@@ -139,13 +139,32 @@ pub const DEFAULT_RING_BUFFER_SIZE: usize = 8192;
 // ============================================================================
 
 /// オーディオ入力デバイスノード
-#[derive(Clone)]
 pub struct AudioInputNode {
     pub device_name: String,
     /// チャンネルごとのバッファ
     pub channel_buffers: Vec<ChannelBuffer>,
     pub channels: u16,
     pub is_active: bool,
+    /// スペクトラム表示を有効にするか
+    pub show_spectrum: bool,
+    /// スペクトラムデータ
+    pub spectrum: Arc<Mutex<Vec<f32>>>,
+    /// スペクトラムアナライザー（最初のチャンネルを解析）
+    pub analyzer: Arc<Mutex<crate::dsp::SpectrumAnalyzer>>,
+}
+
+impl Clone for AudioInputNode {
+    fn clone(&self) -> Self {
+        Self {
+            device_name: self.device_name.clone(),
+            channel_buffers: self.channel_buffers.clone(),
+            channels: self.channels,
+            is_active: self.is_active,
+            show_spectrum: self.show_spectrum,
+            spectrum: self.spectrum.clone(),
+            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+        }
+    }
 }
 
 impl AudioInputNode {
@@ -159,6 +178,9 @@ impl AudioInputNode {
             channel_buffers,
             channels,
             is_active: false,
+            show_spectrum: true,
+            spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
+            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
         }
     }
 
@@ -261,13 +283,32 @@ impl NodeBehavior for AudioInputNode {
 // ============================================================================
 
 /// オーディオ出力デバイスノード
-#[derive(Clone)]
 pub struct AudioOutputNode {
     pub device_name: String,
     /// チャンネルごとのバッファ
     pub channel_buffers: Vec<ChannelBuffer>,
     pub channels: u16,
     pub is_active: bool,
+    /// スペクトラム表示を有効にするか
+    pub show_spectrum: bool,
+    /// スペクトラムデータ
+    pub spectrum: Arc<Mutex<Vec<f32>>>,
+    /// スペクトラムアナライザー（最初のチャンネルを解析）
+    pub analyzer: Arc<Mutex<crate::dsp::SpectrumAnalyzer>>,
+}
+
+impl Clone for AudioOutputNode {
+    fn clone(&self) -> Self {
+        Self {
+            device_name: self.device_name.clone(),
+            channel_buffers: self.channel_buffers.clone(),
+            channels: self.channels,
+            is_active: self.is_active,
+            show_spectrum: self.show_spectrum,
+            spectrum: self.spectrum.clone(),
+            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+        }
+    }
 }
 
 impl AudioOutputNode {
@@ -281,6 +322,9 @@ impl AudioOutputNode {
             channel_buffers,
             channels,
             is_active: false,
+            show_spectrum: true,
+            spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
+            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
         }
     }
 
@@ -853,6 +897,8 @@ impl NodeBehavior for FilterNode {
 
 /// FFTサイズ
 pub const FFT_SIZE: usize = 1024;
+/// GraphicEQ用のFFTサイズ（dsp.rsのEQ_FFT_SIZEと同じ値）
+pub const EQ_FFT_SIZE: usize = 2048;
 
 /// スペクトラムアナライザーノード
 pub struct SpectrumAnalyzerNode {
@@ -1248,6 +1294,10 @@ pub struct GraphicEqNode {
     pub is_active: bool,
     /// グラフィックEQプロセッサー（スレッドセーフ）
     pub graphic_eq: Arc<Mutex<crate::dsp::GraphicEq>>,
+    /// スペクトラム表示を有効にするか
+    pub show_spectrum: bool,
+    /// スペクトラムデータ（入力信号）
+    pub spectrum: Arc<Mutex<Vec<f32>>>,
 }
 
 impl Clone for GraphicEqNode {
@@ -1258,6 +1308,8 @@ impl Clone for GraphicEqNode {
             output_buffer: self.output_buffer.clone(),
             is_active: self.is_active,
             graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
+            show_spectrum: self.show_spectrum,
+            spectrum: self.spectrum.clone(),
         }
     }
 }
@@ -1278,6 +1330,8 @@ impl GraphicEqNode {
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
+            show_spectrum: true,
+            spectrum: Arc::new(Mutex::new(vec![0.0; EQ_FFT_SIZE / 2])),
         }
     }
 

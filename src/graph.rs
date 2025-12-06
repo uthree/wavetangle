@@ -50,6 +50,64 @@ impl AudioGraphProcessor {
 
         // エフェクトノードの処理チェーンを構築・更新
         self.update_effect_chain(snarl);
+
+        // スペクトラム解析を更新
+        self.update_spectrum(snarl);
+    }
+
+    /// 入出力ノードとGraphicEQのスペクトラムを更新
+    fn update_spectrum(&self, snarl: &mut Snarl<AudioNode>) {
+        use crate::nodes::FFT_SIZE;
+
+        for (_, node) in snarl.nodes_ids_mut() {
+            match node {
+                AudioNode::AudioInput(input_node) => {
+                    if input_node.is_active {
+                        // 最初のチャンネルからデータを取得してスペクトラム解析（常に更新）
+                        if let Some(buffer) = input_node.channel_buffers.first() {
+                            let mut samples = vec![0.0f32; FFT_SIZE];
+                            buffer.lock().peek(&mut samples);
+
+                            let mut analyzer = input_node.analyzer.lock();
+                            analyzer.push_samples(&samples);
+                            let spectrum_data = analyzer.compute_spectrum();
+
+                            let mut spectrum = input_node.spectrum.lock();
+                            spectrum.copy_from_slice(&spectrum_data);
+                        }
+                    }
+                }
+                AudioNode::AudioOutput(output_node) => {
+                    if output_node.is_active {
+                        // 最初のチャンネルからデータを取得してスペクトラム解析（常に更新）
+                        if let Some(buffer) = output_node.channel_buffers.first() {
+                            let mut samples = vec![0.0f32; FFT_SIZE];
+                            buffer.lock().peek(&mut samples);
+
+                            let mut analyzer = output_node.analyzer.lock();
+                            analyzer.push_samples(&samples);
+                            let spectrum_data = analyzer.compute_spectrum();
+
+                            let mut spectrum = output_node.spectrum.lock();
+                            spectrum.copy_from_slice(&spectrum_data);
+                        }
+                    }
+                }
+                AudioNode::GraphicEq(eq_node) => {
+                    if eq_node.show_spectrum {
+                        // 入力バッファからスペクトラムを取得
+                        // GraphicEqは内部でFFTを使用しているので、そのスペクトラムを再利用
+                        let eq = eq_node.graphic_eq.lock();
+                        let spectrum_data = eq.get_input_spectrum();
+                        let mut spectrum = eq_node.spectrum.lock();
+                        if spectrum.len() == spectrum_data.len() {
+                            spectrum.copy_from_slice(spectrum_data);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// エフェクト処理チェーンを更新

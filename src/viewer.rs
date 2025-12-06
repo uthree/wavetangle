@@ -1,8 +1,9 @@
 use egui::{Color32, Ui};
-use egui_plot::{Bar, BarChart, Plot};
+use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, Points};
 use egui_snarl::ui::{PinInfo, SnarlPin, SnarlViewer};
 use egui_snarl::{InPin, NodeId, OutPin, Snarl};
 
+use crate::dsp::EqPoint;
 use crate::nodes::{AudioNode, FilterType, NodeBehavior, PinType, FFT_SIZE};
 
 /// ピンタイプに応じた色を取得
@@ -145,6 +146,9 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             AudioNode::PitchShift(pitch_shift_node) => {
                 self.show_pitch_shift_body(node_id, pitch_shift_node, ui);
             }
+            AudioNode::GraphicEq(graphic_eq_node) => {
+                self.show_graphic_eq_body(node_id, graphic_eq_node, ui);
+            }
         }
     }
 
@@ -227,6 +231,13 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
                 snarl.insert_node(
                     pos,
                     AudioNode::PitchShift(crate::nodes::PitchShiftNode::new()),
+                );
+                ui.close();
+            }
+            if ui.button("Graphic EQ").clicked() {
+                snarl.insert_node(
+                    pos,
+                    AudioNode::GraphicEq(crate::nodes::GraphicEqNode::new()),
                 );
                 ui.close();
             }
@@ -496,5 +507,179 @@ impl AudioGraphViewer {
         } else {
             ui.label(format!("{:+} semitones", semitones_int));
         }
+    }
+
+    fn show_graphic_eq_body(
+        &self,
+        node_id: NodeId,
+        node: &mut crate::nodes::GraphicEqNode,
+        ui: &mut Ui,
+    ) {
+        // 周波数範囲
+        const MIN_FREQ: f64 = 20.0;
+        const MAX_FREQ: f64 = 20000.0;
+        const MIN_GAIN: f64 = -24.0;
+        const MAX_GAIN: f64 = 24.0;
+
+        // 周波数を対数スケールのX座標に変換
+        let freq_to_x = |freq: f64| -> f64 { (freq / MIN_FREQ).ln() / (MAX_FREQ / MIN_FREQ).ln() };
+        let x_to_freq = |x: f64| -> f64 { MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(x) };
+
+        // EQカーブを描画するためのポイントを生成
+        let curve_points: Vec<[f64; 2]> = (0..=100)
+            .map(|i| {
+                let x = i as f64 / 100.0;
+                let freq = x_to_freq(x) as f32;
+
+                // ポイント間を線形補間してゲインを計算
+                let gain = Self::interpolate_eq_gain(&node.eq_points, freq);
+                [x, gain as f64]
+            })
+            .collect();
+
+        // コントロールポイントの座標
+        let control_points: Vec<[f64; 2]> = node
+            .eq_points
+            .iter()
+            .map(|p| [freq_to_x(p.freq as f64), p.gain_db as f64])
+            .collect();
+
+        // プロット表示
+        let plot_response = Plot::new(format!("graphic_eq_{:?}", node_id))
+            .height(150.0)
+            .width(280.0)
+            .allow_zoom(false)
+            .allow_scroll(false)
+            .allow_drag(false)
+            .allow_boxed_zoom(false)
+            .show_axes([false, true])
+            .show_grid([true, true])
+            .include_x(0.0)
+            .include_x(1.0)
+            .include_y(MIN_GAIN)
+            .include_y(MAX_GAIN)
+            .x_axis_label("Freq")
+            .y_axis_label("dB")
+            .show(ui, |plot_ui| {
+                // 0dBライン
+                plot_ui.line(
+                    Line::new("zero", PlotPoints::from(vec![[0.0, 0.0], [1.0, 0.0]]))
+                        .color(Color32::from_gray(100))
+                        .width(1.0),
+                );
+
+                // EQカーブ
+                plot_ui.line(
+                    Line::new("eq_curve", PlotPoints::from(curve_points))
+                        .color(Color32::from_rgb(100, 200, 255))
+                        .width(2.0),
+                );
+
+                // コントロールポイント
+                plot_ui.points(
+                    Points::new("eq_points", PlotPoints::from(control_points.clone()))
+                        .radius(6.0)
+                        .color(Color32::from_rgb(255, 200, 100))
+                        .filled(true),
+                );
+            });
+
+        // ドラッグでポイントを移動
+        if let Some(pointer_pos) = plot_response.response.hover_pos() {
+            let plot_bounds = plot_response.transform.bounds();
+            let plot_rect = plot_response.response.rect;
+
+            // ポインタ位置をプロット座標に変換
+            let pointer_x = ((pointer_pos.x - plot_rect.left()) / plot_rect.width()
+                * plot_bounds.width() as f32
+                + plot_bounds.min()[0] as f32) as f64;
+            let pointer_y = ((1.0 - (pointer_pos.y - plot_rect.top()) / plot_rect.height())
+                * plot_bounds.height() as f32
+                + plot_bounds.min()[1] as f32) as f64;
+
+            // クリック/ドラッグ処理
+            let is_primary_down = ui.input(|i| i.pointer.primary_down());
+            let is_clicked = plot_response.response.clicked();
+
+            if is_primary_down || is_clicked {
+                // 最も近いポイントを探す
+                let mut closest_idx = None;
+                let mut closest_dist = f64::MAX;
+
+                for (idx, point) in control_points.iter().enumerate() {
+                    let dx = (point[0] - pointer_x) * plot_rect.width() as f64;
+                    let dy =
+                        (point[1] - pointer_y) / plot_bounds.height() * plot_rect.height() as f64;
+                    let dist = (dx * dx + dy * dy).sqrt();
+
+                    if dist < closest_dist && dist < 20.0 {
+                        closest_dist = dist;
+                        closest_idx = Some(idx);
+                    }
+                }
+
+                // ポイントを移動
+                if let Some(idx) = closest_idx {
+                    let new_gain = pointer_y.clamp(MIN_GAIN, MAX_GAIN) as f32;
+                    node.eq_points[idx].gain_db = new_gain;
+
+                    // GraphicEqの周波数ゲインカーブを更新
+                    let mut eq = node.graphic_eq.lock();
+                    eq.update_curve(&node.eq_points);
+                }
+            }
+        }
+
+        // ポイント一覧（周波数ラベル）
+        ui.horizontal(|ui| {
+            for point in &node.eq_points {
+                let freq_str = if point.freq >= 1000.0 {
+                    format!("{:.1}k", point.freq / 1000.0)
+                } else {
+                    format!("{:.0}", point.freq)
+                };
+                ui.label(format!("{}:{:+.1}dB", freq_str, point.gain_db));
+            }
+        });
+
+        // リセットボタン
+        if ui.button("Reset").clicked() {
+            for point in &mut node.eq_points {
+                point.gain_db = 0.0;
+            }
+            let mut eq = node.graphic_eq.lock();
+            eq.update_curve(&node.eq_points);
+        }
+    }
+
+    /// EQポイント間を線形補間してゲインを取得
+    fn interpolate_eq_gain(points: &[EqPoint], freq: f32) -> f32 {
+        if points.is_empty() {
+            return 0.0;
+        }
+
+        // 周波数が最小より小さい場合
+        if freq <= points[0].freq {
+            return points[0].gain_db;
+        }
+
+        // 周波数が最大より大きい場合
+        if freq >= points[points.len() - 1].freq {
+            return points[points.len() - 1].gain_db;
+        }
+
+        // 補間
+        for i in 0..points.len() - 1 {
+            if freq >= points[i].freq && freq <= points[i + 1].freq {
+                let log_freq = freq.ln();
+                let log_freq_low = points[i].freq.ln();
+                let log_freq_high = points[i + 1].freq.ln();
+
+                let t = (log_freq - log_freq_low) / (log_freq_high - log_freq_low);
+                return points[i].gain_db + t * (points[i + 1].gain_db - points[i].gain_db);
+            }
+        }
+
+        0.0
     }
 }

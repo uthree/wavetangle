@@ -1233,6 +1233,147 @@ impl NodeBehavior for PitchShiftNode {
 }
 
 // ============================================================================
+// GraphicEqNode - グラフィックイコライザー
+// ============================================================================
+
+/// グラフィックイコライザーノード（カーブエディター付き）
+pub struct GraphicEqNode {
+    /// EQカーブのコントロールポイント
+    pub eq_points: Vec<crate::dsp::EqPoint>,
+    /// 入力バッファ（1入力）
+    pub input_buffers: Vec<ChannelBuffer>,
+    /// 出力バッファ
+    pub output_buffer: ChannelBuffer,
+    /// アクティブ状態
+    pub is_active: bool,
+    /// グラフィックEQプロセッサー（スレッドセーフ）
+    pub graphic_eq: Arc<Mutex<crate::dsp::GraphicEq>>,
+}
+
+impl Clone for GraphicEqNode {
+    fn clone(&self) -> Self {
+        Self {
+            eq_points: self.eq_points.clone(),
+            input_buffers: self.input_buffers.clone(),
+            output_buffer: self.output_buffer.clone(),
+            is_active: self.is_active,
+            graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
+        }
+    }
+}
+
+impl GraphicEqNode {
+    pub fn new() -> Self {
+        // デフォルトの5ポイントEQカーブ
+        let eq_points = vec![
+            crate::dsp::EqPoint::new(50.0, 0.0),
+            crate::dsp::EqPoint::new(200.0, 0.0),
+            crate::dsp::EqPoint::new(1000.0, 0.0),
+            crate::dsp::EqPoint::new(5000.0, 0.0),
+            crate::dsp::EqPoint::new(15000.0, 0.0),
+        ];
+        Self {
+            eq_points,
+            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
+            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            is_active: false,
+            graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
+        }
+    }
+
+    /// EQカーブを更新（UIから呼ばれる）
+    #[allow(dead_code)]
+    pub fn update_eq_curve(&mut self) {
+        // ポイントを周波数でソート
+        self.eq_points
+            .sort_by(|a, b| a.freq.partial_cmp(&b.freq).unwrap());
+        self.graphic_eq.lock().update_curve(&self.eq_points);
+    }
+}
+
+impl Default for GraphicEqNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NodeBehavior for GraphicEqNode {
+    fn title(&self) -> &str {
+        "Graphic EQ"
+    }
+
+    fn category(&self) -> NodeCategory {
+        NodeCategory::Effect
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn input_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn input_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("In")
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("Out")
+        } else {
+            None
+        }
+    }
+
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
+    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+        if channel == 0 {
+            Some(self.output_buffer.clone())
+        } else {
+            None
+        }
+    }
+
+    fn channels(&self) -> u16 {
+        1
+    }
+
+    fn set_channels(&mut self, _channels: u16) {}
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn set_active(&mut self, active: bool) {
+        self.is_active = active;
+    }
+}
+
+// ============================================================================
 // AudioNode Enum - egui-snarlで使用するラッパー
 // ============================================================================
 
@@ -1248,6 +1389,7 @@ pub enum AudioNode {
     SpectrumAnalyzer(SpectrumAnalyzerNode),
     Compressor(CompressorNode),
     PitchShift(PitchShiftNode),
+    GraphicEq(GraphicEqNode),
 }
 
 /// enumバリアントに対してtraitメソッドをデリゲートするマクロ
@@ -1263,6 +1405,7 @@ macro_rules! delegate_node_behavior {
             AudioNode::SpectrumAnalyzer(node) => node.$method($($arg),*),
             AudioNode::Compressor(node) => node.$method($($arg),*),
             AudioNode::PitchShift(node) => node.$method($($arg),*),
+            AudioNode::GraphicEq(node) => node.$method($($arg),*),
         }
     };
 }
@@ -1323,6 +1466,7 @@ impl NodeBehavior for AudioNode {
             AudioNode::SpectrumAnalyzer(node) => node.set_channels(channels),
             AudioNode::Compressor(node) => node.set_channels(channels),
             AudioNode::PitchShift(node) => node.set_channels(channels),
+            AudioNode::GraphicEq(node) => node.set_channels(channels),
         }
     }
 
@@ -1341,6 +1485,7 @@ impl NodeBehavior for AudioNode {
             AudioNode::SpectrumAnalyzer(node) => node.set_active(active),
             AudioNode::Compressor(node) => node.set_active(active),
             AudioNode::PitchShift(node) => node.set_active(active),
+            AudioNode::GraphicEq(node) => node.set_active(active),
         }
     }
 }

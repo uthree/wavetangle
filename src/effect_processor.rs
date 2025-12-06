@@ -55,6 +55,9 @@ pub enum EffectNodeType {
         semitones: f32,
         pitch_shifter: Arc<Mutex<crate::dsp::PitchShifter>>,
     },
+    GraphicEq {
+        graphic_eq: Arc<Mutex<crate::dsp::GraphicEq>>,
+    },
 }
 
 /// エフェクトプロセッサー
@@ -291,6 +294,12 @@ impl EffectProcessor {
                 shifter.set_semitones(*semitones);
                 let mut output = vec![0.0; input_a.len()];
                 shifter.process(&input_a, &mut output);
+                output
+            }
+            EffectNodeType::GraphicEq { graphic_eq } => {
+                let mut eq = graphic_eq.lock();
+                let mut output = vec![0.0; input_a.len()];
+                eq.process(&input_a, &mut output);
                 output
             }
         };

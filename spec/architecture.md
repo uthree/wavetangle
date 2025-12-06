@@ -53,6 +53,7 @@ src/
 - `SpectrumAnalyzer(SpectrumAnalyzerNode)`: スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
 - `Compressor(CompressorNode)`: コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
 - `PitchShift(PitchShiftNode)`: ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
+- `GraphicEq(GraphicEqNode)`: グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI）
 
 `delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
 新しいノードタイプを追加する際は：
@@ -89,7 +90,7 @@ cpalを使用したオーディオデバイス管理システム。
   - `source_buffers`: 接続元ノードの出力バッファ（データコピー元）
   - `input_buffers`: ノード自身の入力バッファ（データコピー先、処理用）
   - `output_buffer`: ノード自身の出力バッファ
-- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, PitchShift）
+- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, PitchShift, GraphicEq）
 - 処理フロー:
   1. ソースバッファからノードの入力バッファへデータをコピー
   2. 入力バッファから読み取り、DSP処理を行い、出力バッファに書き込み
@@ -143,6 +144,11 @@ egui-snarlのSnarlViewerトレイトを実装。
   - 4グレインオーバーラップ、1024サンプルグレインサイズ
   - ハン窓による滑らかなクロスフェード
   - 線形補間による高品質な再サンプリング
+- `GraphicEq`: FFTベースのグラフィックイコライザー
+  - 2048点FFT、50%オーバーラップ
+  - EqPoint構造体でコントロールポイント管理（周波数とゲイン）
+  - 対数周波数スケールで線形補間
+  - egui_plotによるカーブエディタUI（ドラッグでポイント移動可能）
 
 ## 依存ライブラリ
 

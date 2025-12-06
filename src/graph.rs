@@ -182,6 +182,12 @@ impl AudioGraphProcessor {
                 },
                 1,
             ),
+            AudioNode::GraphicEq(eq_node) => (
+                EffectNodeType::GraphicEq {
+                    graphic_eq: eq_node.graphic_eq.clone(),
+                },
+                1,
+            ),
             // 入出力ノードはエフェクトノードではない
             AudioNode::AudioInput(_) | AudioNode::AudioOutput(_) => return None,
         };
@@ -257,7 +263,8 @@ impl AudioGraphProcessor {
                 | AudioNode::Filter(_)
                 | AudioNode::SpectrumAnalyzer(_)
                 | AudioNode::Compressor(_)
-                | AudioNode::PitchShift(_) => {
+                | AudioNode::PitchShift(_)
+                | AudioNode::GraphicEq(_) => {
                     // エフェクトノードはEffectProcessorで処理される
                 }
             }

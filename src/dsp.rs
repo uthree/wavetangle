@@ -3,6 +3,7 @@
 //! 各ノードのオーディオ処理アルゴリズムを実装
 
 use std::f32::consts::PI;
+use std::sync::Arc;
 
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
@@ -475,6 +476,207 @@ impl PitchShifter {
 }
 
 impl Default for PitchShifter {
+    fn default() -> Self {
+        Self::new(44100.0)
+    }
+}
+
+// ============================================================================
+// グラフィックイコライザー
+// ============================================================================
+
+/// EQカーブ上のコントロールポイント
+#[derive(Clone, Copy, Debug)]
+pub struct EqPoint {
+    /// 周波数 (Hz, 対数スケール用)
+    pub freq: f32,
+    /// ゲイン (dB)
+    pub gain_db: f32,
+}
+
+impl EqPoint {
+    pub fn new(freq: f32, gain_db: f32) -> Self {
+        Self { freq, gain_db }
+    }
+}
+
+/// グラフィックEQのFFTサイズ
+pub const EQ_FFT_SIZE: usize = 2048;
+/// ホップサイズ（50%オーバーラップ）
+const EQ_HOP_SIZE: usize = EQ_FFT_SIZE / 2;
+
+/// FFTベースのグラフィックイコライザー
+pub struct GraphicEq {
+    /// FFTプランナー
+    fft: Arc<dyn rustfft::Fft<f32>>,
+    /// IFFTプランナー
+    ifft: Arc<dyn rustfft::Fft<f32>>,
+    /// 入力バッファ
+    input_buffer: Vec<f32>,
+    /// 出力バッファ
+    output_buffer: Vec<f32>,
+    /// 入力書き込み位置
+    input_pos: usize,
+    /// 出力読み取り位置
+    output_pos: usize,
+    /// FFT作業用バッファ
+    fft_buffer: Vec<Complex<f32>>,
+    /// 窓関数
+    window: Vec<f32>,
+    /// 周波数ごとのゲイン（線形スケール）
+    freq_gains: Vec<f32>,
+    /// サンプルレート
+    sample_rate: f32,
+    /// 処理済みサンプル数
+    samples_since_fft: usize,
+}
+
+impl GraphicEq {
+    pub fn new(sample_rate: f32) -> Self {
+        let mut planner = FftPlanner::new();
+        let fft = planner.plan_fft_forward(EQ_FFT_SIZE);
+        let ifft = planner.plan_fft_inverse(EQ_FFT_SIZE);
+
+        // ハン窓を生成
+        let window: Vec<f32> = (0..EQ_FFT_SIZE)
+            .map(|i| {
+                let t = i as f32 / EQ_FFT_SIZE as f32;
+                0.5 * (1.0 - (2.0 * PI * t).cos())
+            })
+            .collect();
+
+        // デフォルトは全帯域フラット（ゲイン1.0）
+        let freq_gains = vec![1.0; EQ_FFT_SIZE / 2 + 1];
+
+        Self {
+            fft,
+            ifft,
+            input_buffer: vec![0.0; EQ_FFT_SIZE * 2],
+            output_buffer: vec![0.0; EQ_FFT_SIZE * 2],
+            input_pos: 0,
+            output_pos: 0,
+            fft_buffer: vec![Complex::new(0.0, 0.0); EQ_FFT_SIZE],
+            window,
+            freq_gains,
+            sample_rate,
+            samples_since_fft: 0,
+        }
+    }
+
+    /// EQカーブからゲインテーブルを更新
+    pub fn update_curve(&mut self, points: &[EqPoint]) {
+        if points.is_empty() {
+            self.freq_gains.fill(1.0);
+            return;
+        }
+
+        let nyquist = self.sample_rate / 2.0;
+        let bin_count = EQ_FFT_SIZE / 2 + 1;
+
+        for bin in 0..bin_count {
+            let freq = (bin as f32 / bin_count as f32) * nyquist;
+            let gain_db = Self::interpolate_gain(points, freq);
+            // dBから線形ゲインに変換
+            self.freq_gains[bin] = 10.0_f32.powf(gain_db / 20.0);
+        }
+    }
+
+    /// ポイント間を線形補間してゲインを取得
+    fn interpolate_gain(points: &[EqPoint], freq: f32) -> f32 {
+        if points.is_empty() {
+            return 0.0;
+        }
+
+        // 周波数でソートされていると仮定
+        if freq <= points[0].freq {
+            return points[0].gain_db;
+        }
+        if freq >= points[points.len() - 1].freq {
+            return points[points.len() - 1].gain_db;
+        }
+
+        // 2点間を線形補間（対数周波数スケール）
+        for i in 0..points.len() - 1 {
+            if freq >= points[i].freq && freq <= points[i + 1].freq {
+                let log_freq = freq.ln();
+                let log_f0 = points[i].freq.ln();
+                let log_f1 = points[i + 1].freq.ln();
+                let t = (log_freq - log_f0) / (log_f1 - log_f0);
+                return points[i].gain_db + t * (points[i + 1].gain_db - points[i].gain_db);
+            }
+        }
+
+        0.0
+    }
+
+    /// オーディオを処理
+    pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        for (i, &sample) in input.iter().enumerate() {
+            // 入力バッファに書き込み
+            self.input_buffer[self.input_pos] = sample;
+            self.input_pos = (self.input_pos + 1) % (EQ_FFT_SIZE * 2);
+            self.samples_since_fft += 1;
+
+            // ホップサイズ分のサンプルが溜まったらFFT処理
+            if self.samples_since_fft >= EQ_HOP_SIZE {
+                self.process_fft_block();
+                self.samples_since_fft = 0;
+            }
+
+            // 出力バッファから読み取り
+            output[i] = self.output_buffer[self.output_pos];
+            self.output_buffer[self.output_pos] = 0.0; // クリア（オーバーラップ加算用）
+            self.output_pos = (self.output_pos + 1) % (EQ_FFT_SIZE * 2);
+        }
+    }
+
+    /// FFTブロック処理
+    fn process_fft_block(&mut self) {
+        // 入力を窓関数付きでFFTバッファにコピー
+        let start = (self.input_pos + EQ_FFT_SIZE * 2 - EQ_FFT_SIZE) % (EQ_FFT_SIZE * 2);
+        for i in 0..EQ_FFT_SIZE {
+            let idx = (start + i) % (EQ_FFT_SIZE * 2);
+            self.fft_buffer[i] = Complex::new(self.input_buffer[idx] * self.window[i], 0.0);
+        }
+
+        // FFT
+        self.fft.process(&mut self.fft_buffer);
+
+        // 周波数領域でゲイン適用
+        let bin_count = EQ_FFT_SIZE / 2 + 1;
+        for bin in 0..bin_count {
+            let gain = self.freq_gains[bin];
+            self.fft_buffer[bin] *= gain;
+            // 対称成分
+            if bin > 0 && bin < EQ_FFT_SIZE / 2 {
+                self.fft_buffer[EQ_FFT_SIZE - bin] *= gain;
+            }
+        }
+
+        // IFFT
+        self.ifft.process(&mut self.fft_buffer);
+
+        // 正規化とオーバーラップ加算
+        let norm = 1.0 / EQ_FFT_SIZE as f32;
+        let out_start = self.output_pos;
+        for i in 0..EQ_FFT_SIZE {
+            let idx = (out_start + i) % (EQ_FFT_SIZE * 2);
+            self.output_buffer[idx] += self.fft_buffer[i].re * norm * self.window[i];
+        }
+    }
+
+    /// リセット
+    #[allow(dead_code)]
+    pub fn reset(&mut self) {
+        self.input_buffer.fill(0.0);
+        self.output_buffer.fill(0.0);
+        self.input_pos = 0;
+        self.output_pos = 0;
+        self.samples_since_fft = 0;
+    }
+}
+
+impl Default for GraphicEq {
     fn default() -> Self {
         Self::new(44100.0)
     }

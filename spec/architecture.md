@@ -13,6 +13,7 @@ src/
 ├── nodes.rs     # オーディオノードの定義
 ├── audio.rs     # cpalを使用したオーディオシステム
 ├── graph.rs     # オーディオグラフの処理ロジック
+├── pipeline.rs  # パイプライン並列処理（ロックフリーSPSCバッファ）
 └── viewer.rs    # egui-snarlのSnarlViewer実装
 ```
 
@@ -42,13 +43,15 @@ src/
 オーディオグラフのノードを表すenum。個別の構造体をラップ：
 - `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード（出力ピン = チャンネル数）
 - `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード（入力ピン = チャンネル数）
+- `Gain(GainNode)`: ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
 
 `delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
 新しいノードタイプを追加する際は：
-1. 構造体を定義（`channel_buffers: Vec<ChannelBuffer>`を含む）
+1. 構造体を定義（`channel_buffers: Vec<ChannelBuffer>`または`input_buffer`/`output_buffer`を含む）
 2. `NodeBehavior`トレイトを実装
 3. `AudioNode` enumにバリアントを追加
 4. マクロにバリアントを追加
+5. `viewer.rs`の`show_body`と`show_graph_menu`を更新
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。
@@ -75,6 +78,14 @@ egui-snarlのSnarlViewerトレイトを実装。
 - ピン接続のロジック（同じPinType同士のみ）
 - コンテキストメニュー（ノード追加・削除）
 
+### Pipeline (pipeline.rs)
+パイプライン並列処理のための基盤。将来的にエフェクトノードをパイプライン処理する。
+- `SpscProducer`/`SpscConsumer`: ロックフリーSPSCリングバッファ（ringbufクレート使用）
+- `ProcessingNode`トレイト: スレッド上でオーディオ処理を行うノードのインターフェース
+- `NodeThread`: 処理スレッドの管理（開始、停止、状態確認）
+- `PipelineBuilder`: ノードをチェーンしてパイプラインを構築
+- `Pipeline`: 実行中のパイプライン管理
+
 ## データフロー
 
 1. `AudioInput`ノードがデバイスからインターリーブされた音声データを取得
@@ -88,11 +99,13 @@ egui-snarlのSnarlViewerトレイトを実装。
 - **egui-snarl**: ノードグラフエディタ
 - **cpal**: クロスプラットフォームオーディオI/O
 - **parking_lot**: 高性能mutex実装
+- **ringbuf**: ロックフリーSPSCリングバッファ（パイプライン並列処理用）
 - **ndarray**: 将来的な信号処理用（現在未使用）
 
 ## 今後の拡張予定
 
-- 音声エフェクトノード（ゲイン、フィルタ等）
+- エフェクトノードのパイプライン処理統合
+- 音声エフェクトノード（フィルタ、ディレイ等）
 - ファイル入出力ノード
 - シグナルジェネレータノード
 - グラフの保存・読み込み

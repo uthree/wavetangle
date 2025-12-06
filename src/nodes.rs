@@ -324,6 +324,115 @@ impl NodeBehavior for AudioOutputNode {
 }
 
 // ============================================================================
+// Gain Node (Effect)
+// ============================================================================
+
+/// ゲインエフェクトノード
+#[derive(Clone)]
+pub struct GainNode {
+    /// ゲイン値（倍率）
+    pub gain: f32,
+    /// 入力バッファ（パイプライン処理用）
+    #[allow(dead_code)]
+    pub input_buffer: ChannelBuffer,
+    /// 出力バッファ
+    pub output_buffer: ChannelBuffer,
+    /// アクティブ状態
+    pub is_active: bool,
+}
+
+impl GainNode {
+    pub fn new() -> Self {
+        Self {
+            gain: 1.0,
+            input_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            is_active: false,
+        }
+    }
+}
+
+impl Default for GainNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NodeBehavior for GainNode {
+    fn title(&self) -> &str {
+        "Gain"
+    }
+
+    fn category(&self) -> NodeCategory {
+        NodeCategory::Effect
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn input_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn input_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("In")
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("Out")
+        } else {
+            None
+        }
+    }
+
+    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+        if channel == 0 {
+            Some(self.output_buffer.clone())
+        } else {
+            None
+        }
+    }
+
+    fn channels(&self) -> u16 {
+        1
+    }
+
+    fn set_channels(&mut self, _channels: u16) {
+        // GainNodeは常に1チャンネル
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn set_active(&mut self, active: bool) {
+        self.is_active = active;
+    }
+}
+
+// ============================================================================
 // AudioNode Enum - egui-snarlで使用するラッパー
 // ============================================================================
 
@@ -332,6 +441,7 @@ impl NodeBehavior for AudioOutputNode {
 pub enum AudioNode {
     AudioInput(AudioInputNode),
     AudioOutput(AudioOutputNode),
+    Gain(GainNode),
 }
 
 /// enumバリアントに対してtraitメソッドをデリゲートするマクロ
@@ -340,6 +450,7 @@ macro_rules! delegate_node_behavior {
         match $self {
             AudioNode::AudioInput(node) => node.$method($($arg),*),
             AudioNode::AudioOutput(node) => node.$method($($arg),*),
+            AudioNode::Gain(node) => node.$method($($arg),*),
         }
     };
 }
@@ -389,6 +500,7 @@ impl NodeBehavior for AudioNode {
         match self {
             AudioNode::AudioInput(node) => node.set_channels(channels),
             AudioNode::AudioOutput(node) => node.set_channels(channels),
+            AudioNode::Gain(node) => node.set_channels(channels),
         }
     }
 
@@ -400,6 +512,7 @@ impl NodeBehavior for AudioNode {
         match self {
             AudioNode::AudioInput(node) => node.set_active(active),
             AudioNode::AudioOutput(node) => node.set_active(active),
+            AudioNode::Gain(node) => node.set_active(active),
         }
     }
 }

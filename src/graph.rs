@@ -62,6 +62,10 @@ impl AudioGraphProcessor {
                         to_stop_output.push(node_id);
                     }
                 }
+                AudioNode::Gain(_) => {
+                    // エフェクトノードはデバイスストリームを持たない
+                    // パイプライン処理で別途管理される
+                }
             }
         }
 

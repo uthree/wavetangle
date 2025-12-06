@@ -1,6 +1,7 @@
 mod audio;
 mod graph;
 mod nodes;
+mod pipeline;
 mod viewer;
 
 use eframe::egui;

@@ -5,7 +5,9 @@
       "Bash(cargo build:*)",
       "WebFetch(domain:docs.rs)",
       "Bash(cargo fmt:*)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "mcp__context7__get-library-docs",
+      "Bash(cargo test:*)"
     ],
     "deny": [],
     "ask": []

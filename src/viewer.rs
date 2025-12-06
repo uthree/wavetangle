@@ -101,6 +101,9 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             AudioNode::AudioOutput(output_node) => {
                 self.show_audio_output_body(node_id, output_node, ui);
             }
+            AudioNode::Gain(gain_node) => {
+                self.show_gain_body(node_id, gain_node, ui);
+            }
         }
     }
 
@@ -161,9 +164,11 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             }
         });
 
-        // 将来のエフェクトノード用
-        ui.add_enabled_ui(false, |ui| {
-            ui.menu_button("Effect", |_ui| {});
+        ui.menu_button("Effect", |ui| {
+            if ui.button("Gain").clicked() {
+                snarl.insert_node(pos, AudioNode::Gain(crate::nodes::GainNode::new()));
+                ui.close();
+            }
         });
     }
 
@@ -248,5 +253,20 @@ impl AudioGraphViewer {
                 ui.label(format!("{}ch", node.channels));
             }
         });
+    }
+
+    fn show_gain_body(&self, _node_id: NodeId, node: &mut crate::nodes::GainNode, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Gain:");
+            ui.add(egui::Slider::new(&mut node.gain, 0.0..=2.0).suffix("x"));
+        });
+
+        // dB表示
+        let db = 20.0 * node.gain.log10();
+        if db.is_finite() {
+            ui.label(format!("{:.1} dB", db));
+        } else {
+            ui.label("-∞ dB");
+        }
     }
 }

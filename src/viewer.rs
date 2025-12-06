@@ -12,6 +12,28 @@ fn pin_color(pin_type: PinType) -> Color32 {
     }
 }
 
+/// HSVからRGBに変換
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+
+    let (r, g, b) = match (h / 60.0) as i32 % 6 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    Color32::from_rgb(
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
+}
+
 /// オーディオグラフビューアー
 pub struct AudioGraphViewer {
     pub input_devices: Vec<String>,
@@ -358,17 +380,17 @@ impl AudioGraphViewer {
     ) {
         // スペクトラムデータを取得
         let spectrum = node.spectrum.lock();
-        let bar_count = 64; // 表示するバーの数
+        let bar_count = 48; // 表示するバーの数
 
         // バーデータを作成
         let bars: Vec<Bar> = (0..bar_count)
             .map(|i| {
-                // 対数スケールでインデックスをマッピング
-                let freq_idx =
-                    ((i as f32 / bar_count as f32).powf(2.0) * (FFT_SIZE / 2) as f32) as usize;
+                // 対数スケールでインデックスをマッピング（低周波を細かく表示）
+                let freq_ratio = i as f32 / bar_count as f32;
+                let freq_idx = (freq_ratio.powf(2.0) * (FFT_SIZE / 2) as f32) as usize;
                 let freq_idx = freq_idx.min(spectrum.len().saturating_sub(1));
 
-                // マグニチュードを正規化（対数スケール）
+                // マグニチュードを正規化（対数スケール、dB変換）
                 let magnitude = if freq_idx < spectrum.len() {
                     spectrum[freq_idx]
                 } else {
@@ -377,18 +399,18 @@ impl AudioGraphViewer {
                 let db = if magnitude > 1e-6 {
                     20.0 * magnitude.log10()
                 } else {
-                    -60.0
+                    -80.0
                 };
-                let normalized = ((db + 60.0) / 60.0).clamp(0.0, 1.0) as f64;
+                // -80dB〜0dBを0.0〜1.0にマッピング
+                let normalized = ((db + 80.0) / 80.0).clamp(0.0, 1.0) as f64;
 
-                // グラデーションカラー
-                let color = Color32::from_rgb(
-                    (100.0 + normalized as f32 * 155.0) as u8,
-                    (200.0 * (1.0 - normalized as f32 * 0.5)) as u8,
-                    100,
-                );
+                // 周波数に応じたグラデーションカラー（低周波=緑、高周波=シアン）
+                let hue = 120.0 + freq_ratio * 60.0; // 緑(120)→シアン(180)
+                let sat = 0.7 + normalized as f32 * 0.3;
+                let val = 0.3 + normalized as f32 * 0.7;
+                let color = hsv_to_rgb(hue, sat, val);
 
-                Bar::new(i as f64, normalized).fill(color).width(0.8)
+                Bar::new(i as f64, normalized).fill(color).width(0.85)
             })
             .collect();
 
@@ -396,8 +418,8 @@ impl AudioGraphViewer {
 
         // egui_plotでバーチャートを表示
         Plot::new(format!("spectrum_{:?}", node_id))
-            .height(80.0)
-            .width(200.0)
+            .height(100.0)
+            .width(220.0)
             .show_axes([false, false])
             .show_grid([false, false])
             .allow_zoom(false)

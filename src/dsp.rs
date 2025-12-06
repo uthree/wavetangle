@@ -236,11 +236,16 @@ pub struct SpectrumAnalyzer {
     fft_output: Vec<Complex<f32>>,
     /// 窓関数
     window: Vec<f32>,
+    /// スムージング済みスペクトラム
+    smoothed: Vec<f32>,
+    /// スムージング係数（0.0-1.0、高いほど遅い追従）
+    smoothing: f32,
 }
 
 impl SpectrumAnalyzer {
     pub fn new() -> Self {
         let planner = FftPlanner::new();
+        let half_size = FFT_SIZE / 2;
 
         // Hann窓を生成
         let window: Vec<f32> = (0..FFT_SIZE)
@@ -257,6 +262,8 @@ impl SpectrumAnalyzer {
             fft_input: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             fft_output: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             window,
+            smoothed: vec![0.0; half_size],
+            smoothing: 0.8, // 80%の前回値 + 20%の新値
         }
     }
 
@@ -266,7 +273,7 @@ impl SpectrumAnalyzer {
         self.write_pos = (self.write_pos + 1) % FFT_SIZE;
     }
 
-    /// スペクトラムを計算してマグニチュードを返す
+    /// スペクトラムを計算してマグニチュード（スムージング済み）を返す
     pub fn compute_spectrum(&mut self) -> Vec<f32> {
         // 窓関数を適用してFFT入力を準備
         for i in 0..FFT_SIZE {
@@ -279,21 +286,22 @@ impl SpectrumAnalyzer {
         self.fft_output.copy_from_slice(&self.fft_input);
         fft.process(&mut self.fft_output);
 
-        // マグニチュードを計算（ナイキスト周波数まで）
+        // マグニチュードを計算してスムージング適用（ナイキスト周波数まで）
         let half_size = FFT_SIZE / 2;
-        let mut magnitudes = Vec::with_capacity(half_size);
         for i in 0..half_size {
-            let mag = self.fft_output[i].norm() / (FFT_SIZE as f32).sqrt();
-            magnitudes.push(mag);
+            let raw_mag = self.fft_output[i].norm() / (FFT_SIZE as f32).sqrt();
+            // 指数移動平均でスムージング
+            self.smoothed[i] = self.smoothing * self.smoothed[i] + (1.0 - self.smoothing) * raw_mag;
         }
 
-        magnitudes
+        self.smoothed.clone()
     }
 
     /// リセット
     #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.input_buffer.fill(0.0);
+        self.smoothed.fill(0.0);
         self.write_pos = 0;
     }
 }

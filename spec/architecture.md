@@ -118,8 +118,11 @@ egui-snarlのSnarlViewerトレイトを実装。
 - `BiquadCoeffs`: Biquadフィルター係数（LowPass/HighPass/BandPass）
 - `BiquadState`: フィルター状態（1サンプル処理）
 - `CompressorParams`: コンプレッサーパラメータ
-- `CompressorState`: コンプレッサー状態（エンベロープフォロワー）
-- `SpectrumAnalyzer`: FFTベースのスペクトラム解析（Hann窓、1024点FFT）
+- `CompressorState`: コンプレッサー状態（エンベロープフォロワー、初期値-120dB）
+- `SpectrumAnalyzer`: FFTベースのスペクトラム解析
+  - Hann窓、1024点FFT
+  - 指数移動平均によるスムージング（係数0.8）
+  - egui_plotでバーチャート表示（48バンド、対数周波数スケール）
 
 ## 依存ライブラリ
 

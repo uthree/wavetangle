@@ -117,8 +117,25 @@ impl EffectProcessor {
                 let nodes_snapshot = nodes.lock().clone();
                 let sr = *sample_rate.lock();
 
+                // すべての入力バッファを収集（重複を除去）
+                let mut input_buffers: Vec<ChannelBuffer> = Vec::new();
+                for node_info in &nodes_snapshot {
+                    for buf in &node_info.input_buffers {
+                        // Arc::ptr_eqで重複チェック
+                        if !input_buffers.iter().any(|b| Arc::ptr_eq(b, buf)) {
+                            input_buffers.push(buf.clone());
+                        }
+                    }
+                }
+
+                // すべてのノードを処理（peekで読み取り）
                 for node_info in &nodes_snapshot {
                     Self::process_node(node_info, block_size, sr);
+                }
+
+                // 処理後、すべての入力バッファを進める
+                for buf in &input_buffers {
+                    buf.lock().advance_read(block_size);
                 }
 
                 // 次の処理まで待機
@@ -223,12 +240,12 @@ impl EffectProcessor {
         output.write(&output_data);
     }
 
-    /// バッファからサンプルを読み取り
+    /// バッファからサンプルを読み取り（peekを使用 - 読み取り位置を進めない）
     fn read_from_buffer(buffers: &[ChannelBuffer], index: usize, count: usize) -> Vec<f32> {
         let mut samples = vec![0.0; count];
         if let Some(buffer) = buffers.get(index) {
-            let mut buf = buffer.lock();
-            buf.read(&mut samples);
+            let buf = buffer.lock();
+            buf.peek(&mut samples);
         }
         samples
     }

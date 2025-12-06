@@ -37,6 +37,20 @@ impl RingBuffer {
         }
     }
 
+    /// データを読み込む（読み取り位置を進めない - 複数のコンシューマー用）
+    pub fn peek(&self, output: &mut [f32]) {
+        let mut pos = self.read_pos;
+        for sample in output.iter_mut() {
+            *sample = self.data[pos];
+            pos = (pos + 1) % self.capacity;
+        }
+    }
+
+    /// 読み取り位置を指定サンプル数だけ進める
+    pub fn advance_read(&mut self, count: usize) {
+        self.read_pos = (self.read_pos + count) % self.capacity;
+    }
+
     /// 利用可能なサンプル数
     #[allow(dead_code)]
     pub fn available(&self) -> usize {

@@ -113,7 +113,6 @@ impl EffectProcessor {
         let interval_ms = self.process_interval_ms;
 
         let handle = thread::spawn(move || {
-            let block_size = 256;
             let interval = Duration::from_millis(interval_ms);
 
             while running.load(Ordering::SeqCst) {
@@ -122,6 +121,10 @@ impl EffectProcessor {
                 // ノードを処理
                 let nodes_snapshot = nodes.lock().clone();
                 let sr = *sample_rate.lock();
+
+                // サンプルレートと処理間隔からブロックサイズを計算
+                // 48kHz, 2ms -> 96 samples
+                let block_size = ((sr * interval_ms as f32) / 1000.0).ceil() as usize;
 
                 // すべてのソースバッファを収集（重複を除去）
                 let mut all_source_buffers: Vec<ChannelBuffer> = Vec::new();
@@ -134,19 +137,32 @@ impl EffectProcessor {
                     }
                 }
 
-                // ステップ1: ソースバッファからノードの入力バッファへデータをコピー
-                for node_info in &nodes_snapshot {
-                    Self::copy_source_to_input(node_info, block_size);
-                }
+                // 最小利用可能サンプル数を確認
+                let min_available = all_source_buffers
+                    .iter()
+                    .map(|buf| buf.lock().available())
+                    .min()
+                    .unwrap_or(0);
 
-                // ステップ2: すべてのノードを処理
-                for node_info in &nodes_snapshot {
-                    Self::process_node(node_info, block_size, sr);
-                }
+                // 処理するサンプル数を決定（利用可能な量を超えない）
+                let actual_block_size = block_size.min(min_available);
 
-                // ステップ3: ソースバッファの読み取り位置を進める
-                for buf in &all_source_buffers {
-                    buf.lock().advance_read(block_size);
+                // データがある場合のみ処理
+                if actual_block_size > 0 {
+                    // ステップ1: ソースバッファからノードの入力バッファへデータをコピー
+                    for node_info in &nodes_snapshot {
+                        Self::copy_source_to_input(node_info, actual_block_size);
+                    }
+
+                    // ステップ2: すべてのノードを処理
+                    for node_info in &nodes_snapshot {
+                        Self::process_node(node_info, actual_block_size, sr);
+                    }
+
+                    // ステップ3: ソースバッファの読み取り位置を進める
+                    for buf in &all_source_buffers {
+                        buf.lock().advance_read(actual_block_size);
+                    }
                 }
 
                 // 次の処理まで待機

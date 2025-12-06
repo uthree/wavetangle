@@ -84,15 +84,15 @@ impl WavetangleApp {
         self.graph_processor.has_active_streams()
     }
 
-    /// すべてのノードを再生開始
-    fn play_all(&mut self) {
+    /// すべてのノードをアクティブ化
+    fn activate_all(&mut self) {
         for (_node_id, node) in self.snarl.nodes_ids_mut() {
             node.set_active(true);
         }
     }
 
-    /// すべてのノードを停止
-    fn stop_all(&mut self) {
+    /// すべてのノードを非アクティブ化
+    fn deactivate_all(&mut self) {
         for (_node_id, node) in self.snarl.nodes_ids_mut() {
             node.set_active(false);
         }
@@ -121,12 +121,12 @@ impl eframe::App for WavetangleApp {
                 });
 
                 ui.menu_button("Transport", |ui| {
-                    if ui.button("Play All").clicked() {
-                        self.play_all();
+                    if ui.button("Activate All").clicked() {
+                        self.activate_all();
                         ui.close();
                     }
-                    if ui.button("Stop All").clicked() {
-                        self.stop_all();
+                    if ui.button("Deactivate All").clicked() {
+                        self.deactivate_all();
                         ui.close();
                     }
                 });
@@ -147,18 +147,6 @@ impl eframe::App for WavetangleApp {
                 ui.menu_button("Help", |ui| {
                     if ui.button("About").clicked() {
                         ui.close();
-                    }
-                });
-
-                // ツールバー領域（右側にトランスポートボタン）
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let is_playing = self.has_active_audio();
-                    if is_playing {
-                        if ui.button("Stop").clicked() {
-                            self.stop_all();
-                        }
-                    } else if ui.button("Play").clicked() {
-                        self.play_all();
                     }
                 });
             });

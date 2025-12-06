@@ -800,6 +800,7 @@ impl SpectrumAnalyzerNode {
     }
 
     /// スペクトラムを更新
+    #[allow(dead_code)]
     pub fn update_spectrum(&self) {
         let mut analyzer = self.analyzer.lock();
         let spectrum_data = analyzer.compute_spectrum();

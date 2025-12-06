@@ -9,12 +9,14 @@ Wavetangleは、egui-snarlを使用したノードベースのオーディオグ
 
 ```
 src/
-├── main.rs      # アプリケーションエントリーポイント、eframeアプリ実装
-├── nodes.rs     # オーディオノードの定義
-├── audio.rs     # cpalを使用したオーディオシステム
-├── graph.rs     # オーディオグラフの処理ロジック
-├── pipeline.rs  # パイプライン並列処理（ロックフリーSPSCバッファ）
-└── viewer.rs    # egui-snarlのSnarlViewer実装
+├── main.rs              # アプリケーションエントリーポイント、eframeアプリ実装
+├── nodes.rs             # オーディオノードの定義
+├── audio.rs             # cpalを使用したオーディオシステム
+├── dsp.rs               # DSPアルゴリズム（フィルター、コンプレッサー、FFT）
+├── effect_processor.rs  # エフェクト処理専用スレッド
+├── graph.rs             # オーディオグラフの処理ロジック
+├── pipeline.rs          # パイプライン並列処理（ロックフリーSPSCバッファ）
+└── viewer.rs            # egui-snarlのSnarlViewer実装
 ```
 
 ## 主要コンポーネント
@@ -75,6 +77,15 @@ cpalを使用したオーディオデバイス管理システム。
 - 出力ノード起動時に、接続された入力ノードのチャンネルバッファを直接参照
 - ストリームのライフサイクル管理
 - チャンネルごとの独立したルーティング
+- トポロジカルソートによるエフェクトノードの処理順序決定
+- EffectProcessorとの連携によるリアルタイムエフェクト処理
+
+### EffectProcessor (effect_processor.rs)
+専用スレッドでエフェクトノードをリアルタイム処理。
+- 2ms間隔で処理スレッドが動作
+- `EffectNodeInfo`: 処理対象ノードの情報（タイプ、入出力バッファ）
+- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor）
+- スレッドセーフなDSP状態管理（`Arc<Mutex<>>`でUI/処理スレッド間共有）
 
 ### AudioGraphViewer (viewer.rs)
 egui-snarlのSnarlViewerトレイトを実装。
@@ -95,8 +106,11 @@ egui-snarlのSnarlViewerトレイトを実装。
 
 1. `AudioInput`ノードがデバイスからインターリーブされた音声データを取得
 2. データはチャンネルごとに分離され、各`ChannelBuffer`（リングバッファ）に書き込まれる
-3. `AudioOutput`ノード起動時、接続された入力ピンのチャンネルバッファを参照
-4. 出力コールバックで各チャンネルバッファから読み取り、インターリーブしてデバイスに出力
+3. `EffectProcessor`スレッドがトポロジカル順序でエフェクトノードを処理
+   - 各エフェクトノードは入力バッファから読み取り、DSP処理を行い、出力バッファに書き込む
+   - フィルター、コンプレッサー等はDSP状態を保持してサンプル間で連続性を維持
+4. `AudioOutput`ノード起動時、接続された入力ピンのチャンネルバッファを参照
+5. 出力コールバックで各チャンネルバッファから読み取り、インターリーブしてデバイスに出力
 
 ## DSP処理 (dsp.rs)
 
@@ -120,7 +134,6 @@ egui-snarlのSnarlViewerトレイトを実装。
 
 ## 今後の拡張予定
 
-- エフェクトノードのパイプライン処理統合
 - ファイル入出力ノード
 - シグナルジェネレータノード（オシレーター）
 - ディレイ・リバーブノード

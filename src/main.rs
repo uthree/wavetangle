@@ -1,5 +1,6 @@
 mod audio;
 mod dsp;
+mod effect_processor;
 mod graph;
 mod nodes;
 mod pipeline;

@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use egui_snarl::{InPinId, NodeId, OutPinId, Snarl};
 
 use crate::audio::AudioSystem;
-use crate::dsp::{BiquadCoeffs, CompressorParams};
+use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
 use crate::nodes::{AudioNode, ChannelBuffer, NodeBehavior};
 
 /// オーディオグラフの処理を管理
@@ -12,6 +12,8 @@ pub struct AudioGraphProcessor {
     active_nodes: HashMap<NodeId, ()>,
     /// サンプルレート
     sample_rate: f32,
+    /// エフェクトプロセッサー
+    effect_processor: EffectProcessor,
 }
 
 impl AudioGraphProcessor {
@@ -19,6 +21,7 @@ impl AudioGraphProcessor {
         Self {
             active_nodes: HashMap::new(),
             sample_rate: 44100.0,
+            effect_processor: EffectProcessor::new(2), // 2ms間隔で高速処理
         }
     }
 
@@ -31,138 +34,174 @@ impl AudioGraphProcessor {
     pub fn process(&mut self, snarl: &mut Snarl<AudioNode>, audio_system: &mut AudioSystem) {
         // サンプルレートを更新
         self.sample_rate = audio_system.config().sample_rate as f32;
+        self.effect_processor.set_sample_rate(self.sample_rate);
 
         // アクティブなノードのストリームを管理
         self.manage_streams(snarl, audio_system);
 
-        // エフェクトノードの処理
-        self.process_effects(snarl);
+        // エフェクトノードの処理チェーンを構築・更新
+        self.update_effect_chain(snarl);
     }
 
-    /// エフェクトノードの処理
-    fn process_effects(&mut self, snarl: &mut Snarl<AudioNode>) {
-        // 処理順序を決定するため、出力ノードから逆順にたどる
-        let node_ids: Vec<NodeId> = snarl.node_ids().map(|(id, _)| id).collect();
+    /// エフェクト処理チェーンを更新
+    fn update_effect_chain(&mut self, snarl: &Snarl<AudioNode>) {
+        // アクティブなオーディオがある場合のみ処理
+        if self.active_nodes.is_empty() {
+            if self.effect_processor.is_running() {
+                self.effect_processor.stop();
+                self.effect_processor.clear_nodes();
+            }
+            return;
+        }
 
-        for node_id in node_ids {
+        // 処理順序を決定（トポロジカルソート）
+        let sorted_nodes = self.topological_sort(snarl);
+
+        // エフェクトノード情報を収集
+        let mut effect_nodes = Vec::new();
+
+        for node_id in sorted_nodes {
             let node = &snarl[node_id];
 
-            // エフェクトノードのみ処理
-            match node {
-                AudioNode::Gain(_)
-                | AudioNode::Add(_)
-                | AudioNode::Multiply(_)
-                | AudioNode::Filter(_)
-                | AudioNode::SpectrumAnalyzer(_)
-                | AudioNode::Compressor(_) => {
-                    self.process_effect_node(snarl, node_id);
-                }
-                _ => {}
+            if let Some(info) = self.build_effect_node_info(snarl, node_id, node) {
+                effect_nodes.push(info);
             }
+        }
+
+        // プロセッサーを更新
+        self.effect_processor.update_nodes(effect_nodes);
+
+        // プロセッサーが停止していれば開始
+        if !self.effect_processor.is_running() {
+            self.effect_processor.start();
         }
     }
 
-    /// 単一のエフェクトノードを処理
-    fn process_effect_node(&mut self, snarl: &Snarl<AudioNode>, node_id: NodeId) {
-        let block_size = 256;
+    /// トポロジカルソートでノードの処理順序を決定
+    fn topological_sort(&self, snarl: &Snarl<AudioNode>) -> Vec<NodeId> {
+        let mut sorted = Vec::new();
+        let mut visited = HashSet::new();
+        let mut temp_visited = HashSet::new();
 
-        // 入力データを収集
-        let input_data = self.collect_input_samples(snarl, node_id, 0, block_size);
-
-        // ノードタイプに応じた処理
-        let node = &snarl[node_id];
-        let output_data: Vec<f32> = match node {
-            AudioNode::Gain(gain_node) => input_data.iter().map(|&s| s * gain_node.gain).collect(),
-            AudioNode::Add(_) => {
-                let input_b = self.collect_input_samples(snarl, node_id, 1, block_size);
-                input_data
-                    .iter()
-                    .zip(input_b.iter())
-                    .map(|(&a, &b)| a + b)
-                    .collect()
-            }
-            AudioNode::Multiply(_) => {
-                let input_b = self.collect_input_samples(snarl, node_id, 1, block_size);
-                input_data
-                    .iter()
-                    .zip(input_b.iter())
-                    .map(|(&a, &b)| a * b)
-                    .collect()
-            }
-            AudioNode::Filter(filter_node) => {
-                let coeffs = BiquadCoeffs::from_filter_type(
-                    filter_node.filter_type,
-                    self.sample_rate,
-                    filter_node.cutoff,
-                    filter_node.resonance,
+        // すべてのノードに対してDFS
+        for (node_id, _) in snarl.node_ids() {
+            if !visited.contains(&node_id) {
+                Self::topological_visit(
+                    snarl,
+                    node_id,
+                    &mut visited,
+                    &mut temp_visited,
+                    &mut sorted,
                 );
-                let mut state = filter_node.biquad_state.lock();
-                input_data
-                    .iter()
-                    .map(|&s| state.process(s, &coeffs))
-                    .collect()
             }
-            AudioNode::SpectrumAnalyzer(spectrum_node) => {
-                // FFT用にサンプルを蓄積
-                {
-                    let mut analyzer = spectrum_node.analyzer.lock();
-                    for &sample in &input_data {
-                        analyzer.push_sample(sample);
-                    }
-                }
-                // スペクトラムを更新
-                spectrum_node.update_spectrum();
-                // パススルー
-                input_data.clone()
-            }
-            AudioNode::Compressor(comp_node) => {
-                let params = CompressorParams {
-                    threshold_db: comp_node.threshold,
-                    ratio: comp_node.ratio,
-                    attack_ms: comp_node.attack,
-                    release_ms: comp_node.release,
-                    makeup_db: comp_node.makeup_gain,
-                    sample_rate: self.sample_rate,
-                };
-                let mut state = comp_node.compressor_state.lock();
-                input_data
-                    .iter()
-                    .map(|&s| state.process(s, &params))
-                    .collect()
-            }
-            _ => input_data.clone(),
-        };
-
-        // 出力バッファに書き込み
-        if let Some(output_buffer) = snarl[node_id].channel_buffer(0) {
-            let mut buffer = output_buffer.lock();
-            buffer.write(&output_data);
         }
+
+        sorted
     }
 
-    /// 指定した入力ピンからサンプルを収集
-    fn collect_input_samples(
+    /// トポロジカルソートのDFS訪問
+    fn topological_visit(
+        snarl: &Snarl<AudioNode>,
+        node_id: NodeId,
+        visited: &mut HashSet<NodeId>,
+        temp_visited: &mut HashSet<NodeId>,
+        sorted: &mut Vec<NodeId>,
+    ) {
+        if temp_visited.contains(&node_id) || visited.contains(&node_id) {
+            return;
+        }
+
+        temp_visited.insert(node_id);
+
+        let node = &snarl[node_id];
+
+        // このノードの入力に接続されているノードを先に訪問
+        for input_idx in 0..node.input_count() {
+            let in_pin = snarl.in_pin(InPinId {
+                node: node_id,
+                input: input_idx,
+            });
+
+            for &remote in &in_pin.remotes {
+                Self::topological_visit(snarl, remote.node, visited, temp_visited, sorted);
+            }
+        }
+
+        temp_visited.remove(&node_id);
+        visited.insert(node_id);
+        sorted.push(node_id);
+    }
+
+    /// エフェクトノード情報を構築
+    fn build_effect_node_info(
         &self,
         snarl: &Snarl<AudioNode>,
         node_id: NodeId,
-        input_idx: usize,
-        count: usize,
-    ) -> Vec<f32> {
-        let in_pin = snarl.in_pin(InPinId {
-            node: node_id,
-            input: input_idx,
-        });
+        node: &AudioNode,
+    ) -> Option<EffectNodeInfo> {
+        let (node_type, input_count) = match node {
+            AudioNode::Gain(gain_node) => (
+                EffectNodeType::Gain {
+                    gain: gain_node.gain,
+                },
+                1,
+            ),
+            AudioNode::Add(_) => (EffectNodeType::Add, 2),
+            AudioNode::Multiply(_) => (EffectNodeType::Multiply, 2),
+            AudioNode::Filter(filter_node) => (
+                EffectNodeType::Filter {
+                    filter_type: filter_node.filter_type,
+                    cutoff: filter_node.cutoff,
+                    resonance: filter_node.resonance,
+                    state: filter_node.biquad_state.clone(),
+                },
+                1,
+            ),
+            AudioNode::SpectrumAnalyzer(spectrum_node) => (
+                EffectNodeType::SpectrumAnalyzer {
+                    analyzer: spectrum_node.analyzer.clone(),
+                    spectrum: spectrum_node.spectrum.clone(),
+                },
+                1,
+            ),
+            AudioNode::Compressor(comp_node) => (
+                EffectNodeType::Compressor {
+                    threshold: comp_node.threshold,
+                    ratio: comp_node.ratio,
+                    attack: comp_node.attack,
+                    release: comp_node.release,
+                    makeup_gain: comp_node.makeup_gain,
+                    state: comp_node.compressor_state.clone(),
+                },
+                1,
+            ),
+            // 入出力ノードはエフェクトノードではない
+            AudioNode::AudioInput(_) | AudioNode::AudioOutput(_) => return None,
+        };
 
-        let mut samples = vec![0.0; count];
+        // 入力バッファを収集
+        let mut input_buffers = Vec::new();
+        for input_idx in 0..input_count {
+            let in_pin = snarl.in_pin(InPinId {
+                node: node_id,
+                input: input_idx,
+            });
 
-        if let Some(&remote) = in_pin.remotes.first() {
-            if let Some(buffer) = snarl[remote.node].channel_buffer(remote.output) {
-                let mut buf = buffer.lock();
-                buf.read(&mut samples);
+            if let Some(&remote) = in_pin.remotes.first() {
+                if let Some(buffer) = snarl[remote.node].channel_buffer(remote.output) {
+                    input_buffers.push(buffer);
+                }
             }
         }
 
-        samples
+        // 出力バッファを取得
+        let output_buffer = node.channel_buffer(0)?;
+
+        Some(EffectNodeInfo {
+            node_type,
+            input_buffers,
+            output_buffer,
+        })
     }
 
     /// ストリームの開始/停止を管理
@@ -201,8 +240,7 @@ impl AudioGraphProcessor {
                 | AudioNode::Filter(_)
                 | AudioNode::SpectrumAnalyzer(_)
                 | AudioNode::Compressor(_) => {
-                    // エフェクトノードはデバイスストリームを持たない
-                    // process_effectsで処理される
+                    // エフェクトノードはEffectProcessorで処理される
                 }
             }
         }

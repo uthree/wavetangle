@@ -168,7 +168,9 @@ impl Default for CompressorState {
 
 impl CompressorState {
     pub fn new() -> Self {
-        Self { envelope: 0.0 }
+        // 初期エンベロープを十分低い値（-120dB）に設定
+        // 0.0（0dB）だと閾値より高くなり、最初からゲインリダクションが適用されてしまう
+        Self { envelope: -120.0 }
     }
 
     /// 1サンプル処理
@@ -216,7 +218,7 @@ impl CompressorState {
     /// リセット
     #[allow(dead_code)]
     pub fn reset(&mut self) {
-        self.envelope = 0.0;
+        self.envelope = -120.0;
     }
 }
 
@@ -325,14 +327,42 @@ mod tests {
     #[test]
     fn test_compressor() {
         let mut state = CompressorState::new();
+        let params = CompressorParams {
+            threshold_db: -20.0,
+            ratio: 4.0,
+            attack_ms: 10.0,
+            release_ms: 100.0,
+            makeup_db: 0.0,
+            sample_rate: 44100.0,
+        };
 
-        // 閾値以下の信号
-        let output = state.process(0.1, -20.0, 4.0, 10.0, 100.0, 0.0, 44100.0);
-        assert!((output - 0.1).abs() < 0.01); // ほぼ変化なし
+        // 閾値以下の信号のテスト：初期状態ではエンベロープが低いのでゲインリダクションなし
+        // まず小さい信号を複数回処理してエンベロープを安定させる
+        for _ in 0..100 {
+            state.process(0.01, &params); // -40dB、閾値より十分小さい
+        }
+        let output = state.process(0.01, &params);
+        // 閾値以下では圧縮されない（makeup_gain=0なので入力≒出力）
+        assert!(
+            (output - 0.01).abs() < 0.005,
+            "Expected ~0.01, got {}",
+            output
+        );
 
-        // 閾値以上の信号
-        let output = state.process(1.0, -20.0, 4.0, 10.0, 100.0, 0.0, 44100.0);
-        assert!(output < 1.0); // 圧縮される
+        // 閾値以上の信号（十分な時間エンベロープを追従させる）
+        // 10msアタック @ 44100Hz = 441サンプルで63%到達
+        // エンベロープが-120dBから0dBまで上昇するには約5-6時定数必要
+        let mut state2 = CompressorState::new();
+        for _ in 0..5000 {
+            state2.process(1.0, &params);
+        }
+        let output = state2.process(1.0, &params);
+        // エンベロープが0dB近くになり、閾値(-20dB)を超えているので圧縮される
+        assert!(
+            output < 0.95, // 4:1レシオで約6dBのゲインリダクションを期待
+            "Expected compression, got {}",
+            output
+        );
     }
 
     #[test]

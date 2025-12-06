@@ -112,7 +112,10 @@ pub trait NodeBehavior {
     /// 出力ピンの名前
     fn output_pin_name(&self, index: usize) -> Option<&str>;
 
-    /// 指定チャンネルのバッファを取得
+    /// 指定入力ピンのバッファを取得（エフェクトノード用）
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer>;
+
+    /// 指定チャンネルの出力バッファを取得
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer>;
 
     /// オーディオチャンネル数を取得
@@ -160,11 +163,26 @@ impl AudioInputNode {
     }
 
     /// チャンネル数に合わせてバッファを再作成
+    /// 注意: 既存のバッファを保持し、必要に応じて追加/削除のみ行う
     pub fn resize_buffers(&mut self, channels: u16) {
+        if self.channels == channels {
+            return; // チャンネル数が同じなら何もしない
+        }
+
+        let old_len = self.channel_buffers.len();
+        let new_len = channels as usize;
+
+        if new_len > old_len {
+            // チャンネルを追加
+            for _ in old_len..new_len {
+                self.channel_buffers
+                    .push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
+            }
+        } else {
+            // チャンネルを削除
+            self.channel_buffers.truncate(new_len);
+        }
         self.channels = channels;
-        self.channel_buffers = (0..channels)
-            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
-            .collect();
     }
 }
 
@@ -211,6 +229,10 @@ impl NodeBehavior for AudioInputNode {
             5 => Some("SR"),
             _ => None,
         }
+    }
+
+    fn input_buffer(&self, _index: usize) -> Option<ChannelBuffer> {
+        None // AudioInputは入力バッファを持たない
     }
 
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
@@ -263,11 +285,26 @@ impl AudioOutputNode {
     }
 
     /// チャンネル数に合わせてバッファを再作成
+    /// 注意: 既存のバッファを保持し、必要に応じて追加/削除のみ行う
     pub fn resize_buffers(&mut self, channels: u16) {
+        if self.channels == channels {
+            return; // チャンネル数が同じなら何もしない
+        }
+
+        let old_len = self.channel_buffers.len();
+        let new_len = channels as usize;
+
+        if new_len > old_len {
+            // チャンネルを追加
+            for _ in old_len..new_len {
+                self.channel_buffers
+                    .push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
+            }
+        } else {
+            // チャンネルを削除
+            self.channel_buffers.truncate(new_len);
+        }
         self.channels = channels;
-        self.channel_buffers = (0..channels)
-            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
-            .collect();
     }
 }
 
@@ -316,6 +353,11 @@ impl NodeBehavior for AudioOutputNode {
         None
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        // AudioOutputの入力はchannel_buffersと同じ（データを受け取る）
+        self.channel_buffers.get(index).cloned()
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         self.channel_buffers.get(channel).cloned()
     }
@@ -346,9 +388,8 @@ impl NodeBehavior for AudioOutputNode {
 pub struct GainNode {
     /// ゲイン値（倍率）
     pub gain: f32,
-    /// 入力バッファ（パイプライン処理用）
-    #[allow(dead_code)]
-    pub input_buffer: ChannelBuffer,
+    /// 入力バッファ（各入力ピンに対応）
+    pub input_buffers: Vec<ChannelBuffer>,
     /// 出力バッファ
     pub output_buffer: ChannelBuffer,
     /// アクティブ状態
@@ -359,7 +400,7 @@ impl GainNode {
     pub fn new() -> Self {
         Self {
             gain: 1.0,
-            input_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
         }
@@ -421,6 +462,10 @@ impl NodeBehavior for GainNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         if channel == 0 {
             Some(self.output_buffer.clone())
@@ -453,6 +498,8 @@ impl NodeBehavior for GainNode {
 /// 加算ノード - 2つの信号を加算
 #[derive(Clone)]
 pub struct AddNode {
+    /// 入力バッファ（2入力）
+    pub input_buffers: Vec<ChannelBuffer>,
     pub output_buffer: ChannelBuffer,
     pub is_active: bool,
 }
@@ -460,6 +507,10 @@ pub struct AddNode {
 impl AddNode {
     pub fn new() -> Self {
         Self {
+            input_buffers: vec![
+                new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+                new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            ], // 2入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
         }
@@ -521,6 +572,10 @@ impl NodeBehavior for AddNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         if channel == 0 {
             Some(self.output_buffer.clone())
@@ -551,6 +606,8 @@ impl NodeBehavior for AddNode {
 /// 乗算ノード - 2つの信号を乗算（リングモジュレーション）
 #[derive(Clone)]
 pub struct MultiplyNode {
+    /// 入力バッファ（2入力）
+    pub input_buffers: Vec<ChannelBuffer>,
     pub output_buffer: ChannelBuffer,
     pub is_active: bool,
 }
@@ -558,6 +615,10 @@ pub struct MultiplyNode {
 impl MultiplyNode {
     pub fn new() -> Self {
         Self {
+            input_buffers: vec![
+                new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+                new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            ], // 2入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
         }
@@ -619,6 +680,10 @@ impl NodeBehavior for MultiplyNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         if channel == 0 {
             Some(self.output_buffer.clone())
@@ -662,6 +727,8 @@ pub struct FilterNode {
     pub cutoff: f32,
     /// レゾナンス (Q値)
     pub resonance: f32,
+    /// 入力バッファ（1入力）
+    pub input_buffers: Vec<ChannelBuffer>,
     pub output_buffer: ChannelBuffer,
     pub is_active: bool,
     /// Biquadフィルター状態
@@ -677,6 +744,7 @@ impl FilterNode {
             filter_type: FilterType::Low,
             cutoff: 1000.0,
             resonance: 0.707,
+            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             biquad_state: Arc::new(Mutex::new(crate::dsp::BiquadState::new())),
@@ -752,6 +820,10 @@ impl NodeBehavior for FilterNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         if channel == 0 {
             Some(self.output_buffer.clone())
@@ -786,6 +858,8 @@ pub const FFT_SIZE: usize = 1024;
 pub struct SpectrumAnalyzerNode {
     /// スペクトラムデータ（マグニチュード）
     pub spectrum: Arc<Mutex<Vec<f32>>>,
+    /// 入力バッファ（1入力）
+    pub input_buffers: Vec<ChannelBuffer>,
     pub output_buffer: ChannelBuffer,
     pub is_active: bool,
     /// FFTアナライザー（スレッドセーフ）
@@ -796,6 +870,7 @@ impl Clone for SpectrumAnalyzerNode {
     fn clone(&self) -> Self {
         Self {
             spectrum: self.spectrum.clone(),
+            input_buffers: self.input_buffers.clone(),
             output_buffer: self.output_buffer.clone(),
             is_active: self.is_active,
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
@@ -807,6 +882,7 @@ impl SpectrumAnalyzerNode {
     pub fn new() -> Self {
         Self {
             spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
+            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
@@ -878,6 +954,10 @@ impl NodeBehavior for SpectrumAnalyzerNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         if channel == 0 {
             Some(self.output_buffer.clone())
@@ -918,6 +998,8 @@ pub struct CompressorNode {
     pub release: f32,
     /// メイクアップゲイン (dB)
     pub makeup_gain: f32,
+    /// 入力バッファ（1入力）
+    pub input_buffers: Vec<ChannelBuffer>,
     pub output_buffer: ChannelBuffer,
     pub is_active: bool,
     /// コンプレッサー状態
@@ -935,6 +1017,7 @@ impl CompressorNode {
             attack: 10.0,
             release: 100.0,
             makeup_gain: 0.0,
+            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             compressor_state: Arc::new(Mutex::new(crate::dsp::CompressorState::new())),
@@ -998,6 +1081,134 @@ impl NodeBehavior for CompressorNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
+    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+        if channel == 0 {
+            Some(self.output_buffer.clone())
+        } else {
+            None
+        }
+    }
+
+    fn channels(&self) -> u16 {
+        1
+    }
+
+    fn set_channels(&mut self, _channels: u16) {}
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn set_active(&mut self, active: bool) {
+        self.is_active = active;
+    }
+}
+
+// ============================================================================
+// PitchShift Node - PSOLAピッチシフト
+// ============================================================================
+
+/// ピッチシフトノード
+pub struct PitchShiftNode {
+    /// ピッチシフト量（半音単位、-12〜+12）
+    pub semitones: f32,
+    /// 入力バッファ（1入力）
+    pub input_buffers: Vec<ChannelBuffer>,
+    /// 出力バッファ
+    pub output_buffer: ChannelBuffer,
+    /// アクティブ状態
+    pub is_active: bool,
+    /// ピッチシフター（スレッドセーフ）
+    pub pitch_shifter: Arc<Mutex<crate::dsp::PitchShifter>>,
+}
+
+impl Clone for PitchShiftNode {
+    fn clone(&self) -> Self {
+        Self {
+            semitones: self.semitones,
+            input_buffers: self.input_buffers.clone(),
+            output_buffer: self.output_buffer.clone(),
+            is_active: self.is_active,
+            pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::new(44100.0))),
+        }
+    }
+}
+
+impl PitchShiftNode {
+    pub fn new() -> Self {
+        Self {
+            semitones: 0.0,
+            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
+            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            is_active: false,
+            pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::new(44100.0))),
+        }
+    }
+}
+
+impl Default for PitchShiftNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NodeBehavior for PitchShiftNode {
+    fn title(&self) -> &str {
+        "Pitch Shift"
+    }
+
+    fn category(&self) -> NodeCategory {
+        NodeCategory::Effect
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn input_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn input_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("In")
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("Out")
+        } else {
+            None
+        }
+    }
+
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         if channel == 0 {
             Some(self.output_buffer.clone())
@@ -1036,6 +1247,7 @@ pub enum AudioNode {
     Filter(FilterNode),
     SpectrumAnalyzer(SpectrumAnalyzerNode),
     Compressor(CompressorNode),
+    PitchShift(PitchShiftNode),
 }
 
 /// enumバリアントに対してtraitメソッドをデリゲートするマクロ
@@ -1050,6 +1262,7 @@ macro_rules! delegate_node_behavior {
             AudioNode::Filter(node) => node.$method($($arg),*),
             AudioNode::SpectrumAnalyzer(node) => node.$method($($arg),*),
             AudioNode::Compressor(node) => node.$method($($arg),*),
+            AudioNode::PitchShift(node) => node.$method($($arg),*),
         }
     };
 }
@@ -1087,6 +1300,10 @@ impl NodeBehavior for AudioNode {
         delegate_node_behavior!(self, output_pin_name, index)
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        delegate_node_behavior!(self, input_buffer, index)
+    }
+
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
         delegate_node_behavior!(self, channel_buffer, channel)
     }
@@ -1105,6 +1322,7 @@ impl NodeBehavior for AudioNode {
             AudioNode::Filter(node) => node.set_channels(channels),
             AudioNode::SpectrumAnalyzer(node) => node.set_channels(channels),
             AudioNode::Compressor(node) => node.set_channels(channels),
+            AudioNode::PitchShift(node) => node.set_channels(channels),
         }
     }
 
@@ -1122,6 +1340,7 @@ impl NodeBehavior for AudioNode {
             AudioNode::Filter(node) => node.set_active(active),
             AudioNode::SpectrumAnalyzer(node) => node.set_active(active),
             AudioNode::Compressor(node) => node.set_active(active),
+            AudioNode::PitchShift(node) => node.set_active(active),
         }
     }
 }

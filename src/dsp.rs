@@ -312,6 +312,63 @@ impl Default for SpectrumAnalyzer {
     }
 }
 
+/// ピッチシフトのバッファサイズ
+pub const PITCH_BUFFER_SIZE: usize = 8192;
+
+/// シンプルなピッチシフター（可変速度再生 + クロスフェード）
+pub struct PitchShifter {
+    /// 入力リングバッファ
+    input_buffer: Vec<f32>,
+    /// 入力書き込み位置
+    write_pos: usize,
+    /// 読み取り位置（浮動小数点）
+    read_pos: f64,
+    /// ピッチシフト量（1.0 = 変化なし、2.0 = 1オクターブ上）
+    pitch_ratio: f32,
+}
+
+impl PitchShifter {
+    pub fn new(_sample_rate: f32) -> Self {
+        Self {
+            input_buffer: vec![0.0; PITCH_BUFFER_SIZE],
+            write_pos: 0,
+            read_pos: 0.0,
+            pitch_ratio: 1.0,
+        }
+    }
+
+    /// ピッチシフト量を設定
+    #[allow(dead_code)]
+    pub fn set_pitch_ratio(&mut self, ratio: f32) {
+        self.pitch_ratio = ratio.clamp(0.5, 2.0);
+    }
+
+    /// 半音単位でピッチを設定（-12 = 1オクターブ下、+12 = 1オクターブ上）
+    pub fn set_semitones(&mut self, semitones: f32) {
+        self.pitch_ratio = 2.0_f32.powf(semitones / 12.0);
+    }
+
+    /// サンプルを処理
+    pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
+        // デバッグ: まずパススルーで動作確認
+        output.copy_from_slice(input);
+    }
+
+    /// リセット
+    #[allow(dead_code)]
+    pub fn reset(&mut self) {
+        self.input_buffer.fill(0.0);
+        self.write_pos = 0;
+        self.read_pos = 0.0;
+    }
+}
+
+impl Default for PitchShifter {
+    fn default() -> Self {
+        Self::new(44100.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

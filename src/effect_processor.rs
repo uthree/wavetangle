@@ -17,7 +17,9 @@ use crate::nodes::{ChannelBuffer, FilterType};
 pub struct EffectNodeInfo {
     /// ノードタイプ
     pub node_type: EffectNodeType,
-    /// 入力バッファへの参照
+    /// 接続されたソースノードの出力バッファ（データコピー元）
+    pub source_buffers: Vec<ChannelBuffer>,
+    /// ノード自身の入力バッファ（データコピー先、処理用）
     pub input_buffers: Vec<ChannelBuffer>,
     /// 出力バッファへの参照
     pub output_buffer: ChannelBuffer,
@@ -48,6 +50,10 @@ pub enum EffectNodeType {
         release: f32,
         makeup_gain: f32,
         state: Arc<Mutex<crate::dsp::CompressorState>>,
+    },
+    PitchShift {
+        semitones: f32,
+        pitch_shifter: Arc<Mutex<crate::dsp::PitchShifter>>,
     },
 }
 
@@ -117,24 +123,29 @@ impl EffectProcessor {
                 let nodes_snapshot = nodes.lock().clone();
                 let sr = *sample_rate.lock();
 
-                // すべての入力バッファを収集（重複を除去）
-                let mut input_buffers: Vec<ChannelBuffer> = Vec::new();
+                // すべてのソースバッファを収集（重複を除去）
+                let mut all_source_buffers: Vec<ChannelBuffer> = Vec::new();
                 for node_info in &nodes_snapshot {
-                    for buf in &node_info.input_buffers {
+                    for buf in &node_info.source_buffers {
                         // Arc::ptr_eqで重複チェック
-                        if !input_buffers.iter().any(|b| Arc::ptr_eq(b, buf)) {
-                            input_buffers.push(buf.clone());
+                        if !all_source_buffers.iter().any(|b| Arc::ptr_eq(b, buf)) {
+                            all_source_buffers.push(buf.clone());
                         }
                     }
                 }
 
-                // すべてのノードを処理（peekで読み取り）
+                // ステップ1: ソースバッファからノードの入力バッファへデータをコピー
+                for node_info in &nodes_snapshot {
+                    Self::copy_source_to_input(node_info, block_size);
+                }
+
+                // ステップ2: すべてのノードを処理
                 for node_info in &nodes_snapshot {
                     Self::process_node(node_info, block_size, sr);
                 }
 
-                // 処理後、すべての入力バッファを進める
-                for buf in &input_buffers {
+                // ステップ3: ソースバッファの読み取り位置を進める
+                for buf in &all_source_buffers {
                     buf.lock().advance_read(block_size);
                 }
 
@@ -162,16 +173,39 @@ impl EffectProcessor {
         self.running.load(Ordering::SeqCst)
     }
 
+    /// ソースバッファからノードの入力バッファへデータをコピー
+    fn copy_source_to_input(node_info: &EffectNodeInfo, block_size: usize) {
+        for (source, input) in node_info
+            .source_buffers
+            .iter()
+            .zip(node_info.input_buffers.iter())
+        {
+            let mut temp = vec![0.0f32; block_size];
+
+            // ソースバッファから読み取り（peek - 位置を進めない）
+            {
+                let source_buf = source.lock();
+                source_buf.peek(&mut temp);
+            }
+
+            // 入力バッファに書き込み
+            {
+                let mut input_buf = input.lock();
+                input_buf.write(&temp);
+            }
+        }
+    }
+
     /// 単一ノードを処理
     fn process_node(node_info: &EffectNodeInfo, block_size: usize, sample_rate: f32) {
-        // 入力データを収集
-        let input_a = Self::read_from_buffer(&node_info.input_buffers, 0, block_size);
+        // 入力データを読み取り（ノード自身の入力バッファから）
+        let input_a = Self::read_from_input_buffer(&node_info.input_buffers, 0, block_size);
 
         // ノードタイプに応じた処理
         let output_data: Vec<f32> = match &node_info.node_type {
             EffectNodeType::Gain { gain } => input_a.iter().map(|&s| s * gain).collect(),
             EffectNodeType::Add => {
-                let input_b = Self::read_from_buffer(&node_info.input_buffers, 1, block_size);
+                let input_b = Self::read_from_input_buffer(&node_info.input_buffers, 1, block_size);
                 input_a
                     .iter()
                     .zip(input_b.iter())
@@ -179,7 +213,7 @@ impl EffectProcessor {
                     .collect()
             }
             EffectNodeType::Multiply => {
-                let input_b = Self::read_from_buffer(&node_info.input_buffers, 1, block_size);
+                let input_b = Self::read_from_input_buffer(&node_info.input_buffers, 1, block_size);
                 input_a
                     .iter()
                     .zip(input_b.iter())
@@ -233,6 +267,16 @@ impl EffectProcessor {
                 let mut state = state.lock();
                 input_a.iter().map(|&s| state.process(s, &params)).collect()
             }
+            EffectNodeType::PitchShift {
+                semitones,
+                pitch_shifter,
+            } => {
+                let mut shifter = pitch_shifter.lock();
+                shifter.set_semitones(*semitones);
+                let mut output = vec![0.0; input_a.len()];
+                shifter.process(&input_a, &mut output);
+                output
+            }
         };
 
         // 出力バッファに書き込み
@@ -240,12 +284,12 @@ impl EffectProcessor {
         output.write(&output_data);
     }
 
-    /// バッファからサンプルを読み取り（peekを使用 - 読み取り位置を進めない）
-    fn read_from_buffer(buffers: &[ChannelBuffer], index: usize, count: usize) -> Vec<f32> {
+    /// 入力バッファからサンプルを読み取り（read - 位置を進める）
+    fn read_from_input_buffer(buffers: &[ChannelBuffer], index: usize, count: usize) -> Vec<f32> {
         let mut samples = vec![0.0; count];
         if let Some(buffer) = buffers.get(index) {
-            let buf = buffer.lock();
-            buf.peek(&mut samples);
+            let mut buf = buffer.lock();
+            buf.read(&mut samples);
         }
         samples
     }

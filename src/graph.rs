@@ -175,22 +175,38 @@ impl AudioGraphProcessor {
                 },
                 1,
             ),
+            AudioNode::PitchShift(pitch_node) => (
+                EffectNodeType::PitchShift {
+                    semitones: pitch_node.semitones,
+                    pitch_shifter: pitch_node.pitch_shifter.clone(),
+                },
+                1,
+            ),
             // 入出力ノードはエフェクトノードではない
             AudioNode::AudioInput(_) | AudioNode::AudioOutput(_) => return None,
         };
 
-        // 入力バッファを収集
+        // ソースバッファを収集（接続されたノードの出力バッファ）
+        let mut source_buffers = Vec::new();
+        // ノード自身の入力バッファを収集
         let mut input_buffers = Vec::new();
+
         for input_idx in 0..input_count {
             let in_pin = snarl.in_pin(InPinId {
                 node: node_id,
                 input: input_idx,
             });
 
+            // ソースバッファ（接続元ノードの出力）
             if let Some(&remote) = in_pin.remotes.first() {
                 if let Some(buffer) = snarl[remote.node].channel_buffer(remote.output) {
-                    input_buffers.push(buffer);
+                    source_buffers.push(buffer);
                 }
+            }
+
+            // ノード自身の入力バッファ
+            if let Some(buffer) = node.input_buffer(input_idx) {
+                input_buffers.push(buffer);
             }
         }
 
@@ -199,6 +215,7 @@ impl AudioGraphProcessor {
 
         Some(EffectNodeInfo {
             node_type,
+            source_buffers,
             input_buffers,
             output_buffer,
         })
@@ -239,7 +256,8 @@ impl AudioGraphProcessor {
                 | AudioNode::Multiply(_)
                 | AudioNode::Filter(_)
                 | AudioNode::SpectrumAnalyzer(_)
-                | AudioNode::Compressor(_) => {
+                | AudioNode::Compressor(_)
+                | AudioNode::PitchShift(_) => {
                     // エフェクトノードはEffectProcessorで処理される
                 }
             }

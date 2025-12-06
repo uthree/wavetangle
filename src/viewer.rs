@@ -142,6 +142,9 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             AudioNode::Compressor(compressor_node) => {
                 self.show_compressor_body(node_id, compressor_node, ui);
             }
+            AudioNode::PitchShift(pitch_shift_node) => {
+                self.show_pitch_shift_body(node_id, pitch_shift_node, ui);
+            }
         }
     }
 
@@ -215,6 +218,13 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
                 snarl.insert_node(
                     pos,
                     AudioNode::Compressor(crate::nodes::CompressorNode::new()),
+                );
+                ui.close();
+            }
+            if ui.button("Pitch Shift").clicked() {
+                snarl.insert_node(
+                    pos,
+                    AudioNode::PitchShift(crate::nodes::PitchShiftNode::new()),
                 );
                 ui.close();
             }
@@ -463,5 +473,26 @@ impl AudioGraphViewer {
             ui.label("Makeup:");
             ui.add(egui::Slider::new(&mut node.makeup_gain, 0.0..=24.0).suffix(" dB"));
         });
+    }
+
+    fn show_pitch_shift_body(
+        &self,
+        _node_id: NodeId,
+        node: &mut crate::nodes::PitchShiftNode,
+        ui: &mut Ui,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label("Semitones:");
+            ui.add(egui::Slider::new(&mut node.semitones, -12.0..=12.0).suffix(" st"));
+        });
+
+        // セント表示
+        let cents = (node.semitones.fract() * 100.0).round() as i32;
+        let semitones_int = node.semitones.trunc() as i32;
+        if cents != 0 {
+            ui.label(format!("{:+} semitones, {:+} cents", semitones_int, cents));
+        } else {
+            ui.label(format!("{:+} semitones", semitones_int));
+        }
     }
 }

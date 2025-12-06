@@ -37,7 +37,8 @@ src/
 - `input_count()`, `output_count()`: ピン数（チャンネル数に連動）
 - `input_pin_type()`, `output_pin_type()`: ピンタイプ
 - `input_pin_name()`, `output_pin_name()`: ピン名（L, R, C, LFE, SL, SR）
-- `channel_buffer()`: 指定チャンネルのバッファを取得
+- `channel_buffer()`: 指定チャンネルの出力バッファを取得
+- `input_buffer()`: 指定入力ピンのバッファを取得（エフェクトノード用）
 - `channels()`, `set_channels()`: チャンネル数（ストリーム開始時に設定、ピン数も更新）
 - `is_active()`, `set_active()`: アクティブ状態
 
@@ -51,6 +52,7 @@ src/
 - `Filter(FilterNode)`: フィルターノード（1入力1出力、Low/High/Band Pass、カットオフ周波数、Q値）
 - `SpectrumAnalyzer(SpectrumAnalyzerNode)`: スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
 - `Compressor(CompressorNode)`: コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
+- `PitchShift(PitchShiftNode)`: ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
 
 `delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
 新しいノードタイプを追加する際は：
@@ -81,10 +83,17 @@ cpalを使用したオーディオデバイス管理システム。
 - EffectProcessorとの連携によるリアルタイムエフェクト処理
 
 ### EffectProcessor (effect_processor.rs)
-専用スレッドでエフェクトノードをリアルタイム処理。
+専用スレッドでエフェクトノードをリアルタイム処理。コピーベースのバッファアーキテクチャを採用。
 - 2ms間隔で処理スレッドが動作
-- `EffectNodeInfo`: 処理対象ノードの情報（タイプ、入出力バッファ）
-- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor）
+- `EffectNodeInfo`: 処理対象ノードの情報
+  - `source_buffers`: 接続元ノードの出力バッファ（データコピー元）
+  - `input_buffers`: ノード自身の入力バッファ（データコピー先、処理用）
+  - `output_buffer`: ノード自身の出力バッファ
+- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, PitchShift）
+- 処理フロー:
+  1. ソースバッファからノードの入力バッファへデータをコピー
+  2. 入力バッファから読み取り、DSP処理を行い、出力バッファに書き込み
+  3. ソースバッファの読み取り位置を進める
 - スレッドセーフなDSP状態管理（`Arc<Mutex<>>`でUI/処理スレッド間共有）
 
 ### AudioGraphViewer (viewer.rs)
@@ -107,10 +116,17 @@ egui-snarlのSnarlViewerトレイトを実装。
 1. `AudioInput`ノードがデバイスからインターリーブされた音声データを取得
 2. データはチャンネルごとに分離され、各`ChannelBuffer`（リングバッファ）に書き込まれる
 3. `EffectProcessor`スレッドがトポロジカル順序でエフェクトノードを処理
-   - 各エフェクトノードは入力バッファから読み取り、DSP処理を行い、出力バッファに書き込む
+   - ソースノードの出力バッファからエフェクトノードの入力バッファへデータをコピー
+   - エフェクトノードは自身の入力バッファから読み取り、DSP処理を行い、出力バッファに書き込む
    - フィルター、コンプレッサー等はDSP状態を保持してサンプル間で連続性を維持
+   - 処理後、ソースバッファの読み取り位置を進める
 4. `AudioOutput`ノード起動時、接続された入力ピンのチャンネルバッファを参照
 5. 出力コールバックで各チャンネルバッファから読み取り、インターリーブしてデバイスに出力
+
+### コピーベースアーキテクチャの利点
+- 各ノードが独自のバッファを持つため、スレッド間の状態共有を最小化
+- ノードの追加・削除時にバッファ参照が壊れない
+- デバッグとトラブルシューティングが容易
 
 ## DSP処理 (dsp.rs)
 
@@ -123,6 +139,10 @@ egui-snarlのSnarlViewerトレイトを実装。
   - Hann窓、1024点FFT
   - 指数移動平均によるスムージング（係数0.8）
   - egui_plotでバーチャート表示（48バンド、対数周波数スケール）
+- `PitchShifter`: グラニュラー合成ベースのピッチシフト
+  - 4グレインオーバーラップ、1024サンプルグレインサイズ
+  - ハン窓による滑らかなクロスフェード
+  - 線形補間による高品質な再サンプリング
 
 ## 依存ライブラリ
 

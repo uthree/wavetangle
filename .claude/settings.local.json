@@ -8,7 +8,9 @@
       "Bash(cargo clippy:*)",
       "mcp__context7__get-library-docs",
       "Bash(cargo test:*)",
-      "Bash(cargo search:*)"
+      "Bash(cargo search:*)",
+      "Bash(pkill:*)",
+      "Bash(cargo run:*)"
     ],
     "deny": [],
     "ask": []

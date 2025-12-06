@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use egui_snarl::{NodeId, Snarl};
 
 use crate::audio::AudioSystem;
-use crate::nodes::{AudioBuffer, AudioNode};
+use crate::nodes::{AudioBuffer, AudioNode, NodeBehavior};
 
 /// オーディオグラフの処理を管理
 pub struct AudioGraphProcessor {
@@ -29,7 +29,7 @@ impl AudioGraphProcessor {
         let mut connections: Vec<(NodeId, NodeId)> = Vec::new();
 
         for (node_id, node) in snarl.node_ids() {
-            if let AudioNode::AudioOutput { .. } = node {
+            if let AudioNode::AudioOutput(_) = node {
                 // 出力ノードの入力ピンに接続されているソースを探す
                 let in_pin = snarl.in_pin(egui_snarl::InPinId {
                     node: node_id,
@@ -51,13 +51,10 @@ impl AudioGraphProcessor {
             if let Some(buffer) = input_buffer {
                 // 出力ノードのバッファを更新
                 let output_node = &mut snarl[output_node_id];
-                if let AudioNode::AudioOutput {
-                    buffer: out_buffer, ..
-                } = output_node
-                {
+                if let AudioNode::AudioOutput(out_node) = output_node {
                     // 入力バッファからデータをコピー
                     let data = buffer.lock().clone();
-                    *out_buffer.lock() = data;
+                    *out_node.buffer.lock() = data;
                 }
             }
         }
@@ -76,25 +73,29 @@ impl AudioGraphProcessor {
 
         for (node_id, node) in snarl.node_ids() {
             match node {
-                AudioNode::AudioInput {
-                    device_name,
-                    buffer,
-                    is_active,
-                } => {
-                    if *is_active && !self.active_connections.contains_key(&node_id) {
-                        to_start_input.push((node_id, device_name.clone(), buffer.clone()));
-                    } else if !*is_active && self.active_connections.contains_key(&node_id) {
+                AudioNode::AudioInput(input_node) => {
+                    if input_node.is_active && !self.active_connections.contains_key(&node_id) {
+                        to_start_input.push((
+                            node_id,
+                            input_node.device_name.clone(),
+                            input_node.buffer.clone(),
+                        ));
+                    } else if !input_node.is_active
+                        && self.active_connections.contains_key(&node_id)
+                    {
                         to_stop_input.push(node_id);
                     }
                 }
-                AudioNode::AudioOutput {
-                    device_name,
-                    buffer,
-                    is_active,
-                } => {
-                    if *is_active && !self.active_connections.contains_key(&node_id) {
-                        to_start_output.push((node_id, device_name.clone(), buffer.clone()));
-                    } else if !*is_active && self.active_connections.contains_key(&node_id) {
+                AudioNode::AudioOutput(output_node) => {
+                    if output_node.is_active && !self.active_connections.contains_key(&node_id) {
+                        to_start_output.push((
+                            node_id,
+                            output_node.device_name.clone(),
+                            output_node.buffer.clone(),
+                        ));
+                    } else if !output_node.is_active
+                        && self.active_connections.contains_key(&node_id)
+                    {
                         to_stop_output.push(node_id);
                     }
                 }

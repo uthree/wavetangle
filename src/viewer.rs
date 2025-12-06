@@ -2,7 +2,14 @@ use egui::{Color32, Ui};
 use egui_snarl::ui::{PinInfo, SnarlPin, SnarlViewer};
 use egui_snarl::{InPin, NodeId, OutPin, Snarl};
 
-use crate::nodes::{AudioNode, PinType};
+use crate::nodes::{AudioNode, NodeBehavior, PinType};
+
+/// ピンタイプに応じた色を取得
+fn pin_color(pin_type: PinType) -> Color32 {
+    match pin_type {
+        PinType::Audio => Color32::from_rgb(100, 200, 100),
+    }
+}
 
 /// オーディオグラフビューアー
 pub struct AudioGraphViewer {
@@ -40,14 +47,19 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
         snarl: &mut Snarl<AudioNode>,
     ) -> impl SnarlPin + 'static {
         let node = &snarl[pin.id.node];
-        let pin_type = node.pin_type(true, pin.id.input);
 
-        ui.label("In");
-
-        match pin_type {
-            PinType::AudioInput => PinInfo::circle().with_fill(Color32::from_rgb(100, 200, 100)),
-            PinType::AudioOutput => PinInfo::circle().with_fill(Color32::from_rgb(200, 100, 100)),
+        // ピン名を表示
+        if let Some(name) = node.input_pin_name(pin.id.input) {
+            ui.label(name);
         }
+
+        // ピンタイプに応じた色
+        let color = node
+            .input_pin_type(pin.id.input)
+            .map(pin_color)
+            .unwrap_or(Color32::GRAY);
+
+        PinInfo::circle().with_fill(color)
     }
 
     fn show_output(
@@ -57,14 +69,19 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
         snarl: &mut Snarl<AudioNode>,
     ) -> impl SnarlPin + 'static {
         let node = &snarl[pin.id.node];
-        let pin_type = node.pin_type(false, pin.id.output);
 
-        ui.label("Out");
-
-        match pin_type {
-            PinType::AudioInput => PinInfo::circle().with_fill(Color32::from_rgb(100, 200, 100)),
-            PinType::AudioOutput => PinInfo::circle().with_fill(Color32::from_rgb(200, 100, 100)),
+        // ピン名を表示
+        if let Some(name) = node.output_pin_name(pin.id.output) {
+            ui.label(name);
         }
+
+        // ピンタイプに応じた色
+        let color = node
+            .output_pin_type(pin.id.output)
+            .map(pin_color)
+            .unwrap_or(Color32::GRAY);
+
+        PinInfo::circle().with_fill(color)
     }
 
     fn show_body(
@@ -78,63 +95,11 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
         let node = &mut snarl[node_id];
 
         match node {
-            AudioNode::AudioInput {
-                device_name,
-                is_active,
-                ..
-            } => {
-                ui.horizontal(|ui| {
-                    ui.label("Device:");
-                    egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
-                        .selected_text(device_name.as_str())
-                        .show_ui(ui, |ui| {
-                            for dev in &self.input_devices {
-                                ui.selectable_value(device_name, dev.clone(), dev);
-                            }
-                        });
-                });
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(if *is_active { "Stop" } else { "Start" })
-                        .clicked()
-                    {
-                        *is_active = !*is_active;
-                    }
-
-                    if *is_active {
-                        ui.label("Active");
-                    }
-                });
+            AudioNode::AudioInput(input_node) => {
+                self.show_audio_input_body(node_id, input_node, ui);
             }
-            AudioNode::AudioOutput {
-                device_name,
-                is_active,
-                ..
-            } => {
-                ui.horizontal(|ui| {
-                    ui.label("Device:");
-                    egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
-                        .selected_text(device_name.as_str())
-                        .show_ui(ui, |ui| {
-                            for dev in &self.output_devices {
-                                ui.selectable_value(device_name, dev.clone(), dev);
-                            }
-                        });
-                });
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(if *is_active { "Stop" } else { "Start" })
-                        .clicked()
-                    {
-                        *is_active = !*is_active;
-                    }
-
-                    if *is_active {
-                        ui.label("Active");
-                    }
-                });
+            AudioNode::AudioOutput(output_node) => {
+                self.show_audio_output_body(node_id, output_node, ui);
             }
         }
     }
@@ -144,16 +109,15 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
     }
 
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<AudioNode>) {
-        // 同じタイプのピン同士を接続
         let from_node = &snarl[from.id.node];
         let to_node = &snarl[to.id.node];
 
-        let from_type = from_node.pin_type(false, from.id.output);
-        let to_type = to_node.pin_type(true, to.id.input);
+        let from_type = from_node.output_pin_type(from.id.output);
+        let to_type = to_node.input_pin_type(to.id.input);
 
-        // オーディオ出力からオーディオ入力への接続のみ許可
-        if from_type == PinType::AudioOutput && to_type == PinType::AudioInput {
-            // 既存の接続を削除
+        // 同じピンタイプ同士のみ接続を許可
+        if from_type.is_some() && from_type == to_type {
+            // 既存の接続を削除（単一入力の場合）
             for &remote in &to.remotes {
                 snarl.disconnect(remote, to.id);
             }
@@ -173,25 +137,34 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
         ui.label("Add Node");
         ui.separator();
 
-        if ui.button("Audio Input").clicked() {
-            let default_device = self
-                .input_devices
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "No device".to_string());
-            snarl.insert_node(pos, AudioNode::new_audio_input(default_device));
-            ui.close();
-        }
+        ui.menu_button("Input", |ui| {
+            if ui.button("Audio Input").clicked() {
+                let default_device = self
+                    .input_devices
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "No device".to_string());
+                snarl.insert_node(pos, AudioNode::new_audio_input(default_device));
+                ui.close();
+            }
+        });
 
-        if ui.button("Audio Output").clicked() {
-            let default_device = self
-                .output_devices
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "No device".to_string());
-            snarl.insert_node(pos, AudioNode::new_audio_output(default_device));
-            ui.close();
-        }
+        ui.menu_button("Output", |ui| {
+            if ui.button("Audio Output").clicked() {
+                let default_device = self
+                    .output_devices
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "No device".to_string());
+                snarl.insert_node(pos, AudioNode::new_audio_output(default_device));
+                ui.close();
+            }
+        });
+
+        // 将来のエフェクトノード用
+        ui.add_enabled_ui(false, |ui| {
+            ui.menu_button("Effect", |_ui| {});
+        });
     }
 
     fn has_node_menu(&mut self, _node: &AudioNode) -> bool {
@@ -210,5 +183,70 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             snarl.remove_node(node_id);
             ui.close();
         }
+    }
+}
+
+// ノードタイプ別のUI表示ヘルパーメソッド
+impl AudioGraphViewer {
+    fn show_audio_input_body(
+        &self,
+        node_id: NodeId,
+        node: &mut crate::nodes::AudioInputNode,
+        ui: &mut Ui,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label("Device:");
+            egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
+                .selected_text(node.device_name.as_str())
+                .show_ui(ui, |ui| {
+                    for dev in &self.input_devices {
+                        ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            if ui
+                .button(if node.is_active { "Stop" } else { "Start" })
+                .clicked()
+            {
+                node.is_active = !node.is_active;
+            }
+
+            if node.is_active {
+                ui.label("Active");
+            }
+        });
+    }
+
+    fn show_audio_output_body(
+        &self,
+        node_id: NodeId,
+        node: &mut crate::nodes::AudioOutputNode,
+        ui: &mut Ui,
+    ) {
+        ui.horizontal(|ui| {
+            ui.label("Device:");
+            egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
+                .selected_text(node.device_name.as_str())
+                .show_ui(ui, |ui| {
+                    for dev in &self.output_devices {
+                        ui.selectable_value(&mut node.device_name, dev.clone(), dev);
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            if ui
+                .button(if node.is_active { "Stop" } else { "Start" })
+                .clicked()
+            {
+                node.is_active = !node.is_active;
+            }
+
+            if node.is_active {
+                ui.label("Active");
+            }
+        });
     }
 }

@@ -18,12 +18,27 @@ src/
 
 ## 主要コンポーネント
 
-### AudioNode (nodes.rs)
-オーディオグラフのノードを表すenum。現在のバリアント：
-- `AudioInput`: オーディオ入力デバイスからの音声を取得
-- `AudioOutput`: 音声をオーディオ出力デバイスに送信
+### NodeBehavior trait (nodes.rs)
+すべてのノードが実装するトレイト。共通インターフェースを定義：
+- `title()`: ノードのタイトル
+- `category()`: ノードのカテゴリ（Input/Output/Effect）
+- `input_count()`, `output_count()`: ピン数
+- `input_pin_type()`, `output_pin_type()`: ピンタイプ
+- `input_pin_name()`, `output_pin_name()`: ピン名
+- `buffer()`: オーディオバッファ
+- `is_active()`, `set_active()`: アクティブ状態
 
-各ノードはデバイス名、バッファ、アクティブ状態を保持します。
+### AudioNode (nodes.rs)
+オーディオグラフのノードを表すenum。個別の構造体をラップ：
+- `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード
+- `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード
+
+`delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
+新しいノードタイプを追加する際は：
+1. 構造体を定義
+2. `NodeBehavior`トレイトを実装
+3. `AudioNode` enumにバリアントを追加
+4. マクロにバリアントを追加
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。

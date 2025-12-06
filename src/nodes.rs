@@ -6,119 +6,323 @@ use parking_lot::Mutex;
 pub type AudioBuffer = Arc<Mutex<Vec<f32>>>;
 
 /// ノードのピンタイプ
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PinType {
-    AudioInput,
-    AudioOutput,
+    Audio,
 }
 
-/// オーディオグラフのノード
+/// ノードの種類（UIでの表示用）
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
+pub enum NodeCategory {
+    Input,
+    Output,
+    Effect,
+}
+
+/// すべてのノードが実装するトレイト
+#[allow(dead_code)]
+pub trait NodeBehavior {
+    /// ノードのタイトル
+    fn title(&self) -> &str;
+
+    /// ノードのカテゴリ
+    fn category(&self) -> NodeCategory;
+
+    /// 入力ピンの数
+    fn input_count(&self) -> usize;
+
+    /// 出力ピンの数
+    fn output_count(&self) -> usize;
+
+    /// 入力ピンのタイプ
+    fn input_pin_type(&self, index: usize) -> Option<PinType>;
+
+    /// 出力ピンのタイプ
+    fn output_pin_type(&self, index: usize) -> Option<PinType>;
+
+    /// 入力ピンの名前
+    fn input_pin_name(&self, index: usize) -> Option<&str>;
+
+    /// 出力ピンの名前
+    fn output_pin_name(&self, index: usize) -> Option<&str>;
+
+    /// オーディオバッファへの参照（あれば）
+    fn buffer(&self) -> Option<&AudioBuffer>;
+
+    /// アクティブ状態を取得
+    fn is_active(&self) -> bool;
+
+    /// アクティブ状態を設定
+    fn set_active(&mut self, active: bool);
+}
+
+// ============================================================================
+// Audio Input Node
+// ============================================================================
+
+/// オーディオ入力デバイスノード
+#[derive(Clone)]
+pub struct AudioInputNode {
+    pub device_name: String,
+    pub buffer: AudioBuffer,
+    pub is_active: bool,
+}
+
+impl AudioInputNode {
+    pub fn new(device_name: String) -> Self {
+        Self {
+            device_name,
+            buffer: Arc::new(Mutex::new(Vec::new())),
+            is_active: false,
+        }
+    }
+}
+
+impl NodeBehavior for AudioInputNode {
+    fn title(&self) -> &str {
+        "Audio Input"
+    }
+
+    fn category(&self) -> NodeCategory {
+        NodeCategory::Input
+    }
+
+    fn input_count(&self) -> usize {
+        0
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn input_pin_type(&self, _index: usize) -> Option<PinType> {
+        None
+    }
+
+    fn output_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn input_pin_name(&self, _index: usize) -> Option<&str> {
+        None
+    }
+
+    fn output_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("Out")
+        } else {
+            None
+        }
+    }
+
+    fn buffer(&self) -> Option<&AudioBuffer> {
+        Some(&self.buffer)
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn set_active(&mut self, active: bool) {
+        self.is_active = active;
+    }
+}
+
+// ============================================================================
+// Audio Output Node
+// ============================================================================
+
+/// オーディオ出力デバイスノード
+#[derive(Clone)]
+pub struct AudioOutputNode {
+    pub device_name: String,
+    pub buffer: AudioBuffer,
+    pub is_active: bool,
+}
+
+impl AudioOutputNode {
+    pub fn new(device_name: String) -> Self {
+        Self {
+            device_name,
+            buffer: Arc::new(Mutex::new(Vec::new())),
+            is_active: false,
+        }
+    }
+}
+
+impl NodeBehavior for AudioOutputNode {
+    fn title(&self) -> &str {
+        "Audio Output"
+    }
+
+    fn category(&self) -> NodeCategory {
+        NodeCategory::Output
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        0
+    }
+
+    fn input_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_type(&self, _index: usize) -> Option<PinType> {
+        None
+    }
+
+    fn input_pin_name(&self, index: usize) -> Option<&str> {
+        if index == 0 {
+            Some("In")
+        } else {
+            None
+        }
+    }
+
+    fn output_pin_name(&self, _index: usize) -> Option<&str> {
+        None
+    }
+
+    fn buffer(&self) -> Option<&AudioBuffer> {
+        Some(&self.buffer)
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn set_active(&mut self, active: bool) {
+        self.is_active = active;
+    }
+}
+
+// ============================================================================
+// AudioNode Enum - egui-snarlで使用するラッパー
+// ============================================================================
+
+/// オーディオグラフのノード（enumラッパー）
 #[derive(Clone)]
 pub enum AudioNode {
-    /// オーディオ入力デバイスノード
-    AudioInput {
-        device_name: String,
-        buffer: AudioBuffer,
-        is_active: bool,
-    },
-    /// オーディオ出力デバイスノード
-    AudioOutput {
-        device_name: String,
-        buffer: AudioBuffer,
-        is_active: bool,
-    },
+    AudioInput(AudioInputNode),
+    AudioOutput(AudioOutputNode),
+}
+
+/// enumバリアントに対してtraitメソッドをデリゲートするマクロ
+macro_rules! delegate_node_behavior {
+    ($self:expr, $method:ident $(, $arg:expr)*) => {
+        match $self {
+            AudioNode::AudioInput(node) => node.$method($($arg),*),
+            AudioNode::AudioOutput(node) => node.$method($($arg),*),
+        }
+    };
+}
+
+impl NodeBehavior for AudioNode {
+    fn title(&self) -> &str {
+        delegate_node_behavior!(self, title)
+    }
+
+    fn category(&self) -> NodeCategory {
+        delegate_node_behavior!(self, category)
+    }
+
+    fn input_count(&self) -> usize {
+        delegate_node_behavior!(self, input_count)
+    }
+
+    fn output_count(&self) -> usize {
+        delegate_node_behavior!(self, output_count)
+    }
+
+    fn input_pin_type(&self, index: usize) -> Option<PinType> {
+        delegate_node_behavior!(self, input_pin_type, index)
+    }
+
+    fn output_pin_type(&self, index: usize) -> Option<PinType> {
+        delegate_node_behavior!(self, output_pin_type, index)
+    }
+
+    fn input_pin_name(&self, index: usize) -> Option<&str> {
+        delegate_node_behavior!(self, input_pin_name, index)
+    }
+
+    fn output_pin_name(&self, index: usize) -> Option<&str> {
+        delegate_node_behavior!(self, output_pin_name, index)
+    }
+
+    fn buffer(&self) -> Option<&AudioBuffer> {
+        delegate_node_behavior!(self, buffer)
+    }
+
+    fn is_active(&self) -> bool {
+        delegate_node_behavior!(self, is_active)
+    }
+
+    fn set_active(&mut self, active: bool) {
+        match self {
+            AudioNode::AudioInput(node) => node.set_active(active),
+            AudioNode::AudioOutput(node) => node.set_active(active),
+        }
+    }
 }
 
 impl AudioNode {
+    /// AudioInputノードを作成
     pub fn new_audio_input(device_name: String) -> Self {
-        Self::AudioInput {
-            device_name,
-            buffer: Arc::new(Mutex::new(Vec::new())),
-            is_active: false,
-        }
+        Self::AudioInput(AudioInputNode::new(device_name))
     }
 
+    /// AudioOutputノードを作成
     pub fn new_audio_output(device_name: String) -> Self {
-        Self::AudioOutput {
-            device_name,
-            buffer: Arc::new(Mutex::new(Vec::new())),
-            is_active: false,
-        }
+        Self::AudioOutput(AudioOutputNode::new(device_name))
     }
 
-    /// ノードのタイトルを取得
-    pub fn title(&self) -> &str {
-        match self {
-            AudioNode::AudioInput { .. } => "Audio Input",
-            AudioNode::AudioOutput { .. } => "Audio Output",
-        }
-    }
-
-    /// ノードの入力ピン数を取得
-    pub fn input_count(&self) -> usize {
-        match self {
-            AudioNode::AudioInput { .. } => 0,
-            AudioNode::AudioOutput { .. } => 1,
-        }
-    }
-
-    /// ノードの出力ピン数を取得
-    pub fn output_count(&self) -> usize {
-        match self {
-            AudioNode::AudioInput { .. } => 1,
-            AudioNode::AudioOutput { .. } => 0,
-        }
-    }
-
-    /// ピンタイプを取得
-    pub fn pin_type(&self, is_input: bool, _index: usize) -> PinType {
-        if is_input {
-            PinType::AudioInput
-        } else {
-            PinType::AudioOutput
-        }
-    }
-
-    /// デバイス名を取得
+    /// AudioInputノードへの参照を取得
     #[allow(dead_code)]
-    pub fn device_name(&self) -> &str {
+    pub fn as_audio_input(&self) -> Option<&AudioInputNode> {
         match self {
-            AudioNode::AudioInput { device_name, .. } => device_name,
-            AudioNode::AudioOutput { device_name, .. } => device_name,
+            AudioNode::AudioInput(node) => Some(node),
+            _ => None,
         }
     }
 
-    /// デバイス名を設定
+    /// AudioInputノードへの可変参照を取得
     #[allow(dead_code)]
-    pub fn set_device_name(&mut self, name: String) {
+    pub fn as_audio_input_mut(&mut self) -> Option<&mut AudioInputNode> {
         match self {
-            AudioNode::AudioInput { device_name, .. } => *device_name = name,
-            AudioNode::AudioOutput { device_name, .. } => *device_name = name,
+            AudioNode::AudioInput(node) => Some(node),
+            _ => None,
         }
     }
 
-    /// アクティブ状態を取得
+    /// AudioOutputノードへの参照を取得
     #[allow(dead_code)]
-    pub fn is_active(&self) -> bool {
+    pub fn as_audio_output(&self) -> Option<&AudioOutputNode> {
         match self {
-            AudioNode::AudioInput { is_active, .. } => *is_active,
-            AudioNode::AudioOutput { is_active, .. } => *is_active,
+            AudioNode::AudioOutput(node) => Some(node),
+            _ => None,
         }
     }
 
-    /// アクティブ状態を設定
-    pub fn set_active(&mut self, active: bool) {
+    /// AudioOutputノードへの可変参照を取得
+    #[allow(dead_code)]
+    pub fn as_audio_output_mut(&mut self) -> Option<&mut AudioOutputNode> {
         match self {
-            AudioNode::AudioInput { is_active, .. } => *is_active = active,
-            AudioNode::AudioOutput { is_active, .. } => *is_active = active,
-        }
-    }
-
-    /// バッファを取得
-    pub fn buffer(&self) -> Option<&AudioBuffer> {
-        match self {
-            AudioNode::AudioInput { buffer, .. } => Some(buffer),
-            AudioNode::AudioOutput { buffer, .. } => Some(buffer),
+            AudioNode::AudioOutput(node) => Some(node),
+            _ => None,
         }
     }
 }

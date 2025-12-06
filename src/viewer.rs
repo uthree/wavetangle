@@ -182,26 +182,28 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
         ui.separator();
 
         ui.menu_button("Input", |ui| {
-            if ui.button("Audio Input").clicked() {
-                let default_device = self
-                    .input_devices
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "No device".to_string());
-                snarl.insert_node(pos, AudioNode::new_audio_input(default_device));
-                ui.close();
+            if self.input_devices.is_empty() {
+                ui.label("No input devices");
+            } else {
+                for device_name in &self.input_devices.clone() {
+                    if ui.button(device_name).clicked() {
+                        snarl.insert_node(pos, AudioNode::new_audio_input(device_name.clone()));
+                        ui.close();
+                    }
+                }
             }
         });
 
         ui.menu_button("Output", |ui| {
-            if ui.button("Audio Output").clicked() {
-                let default_device = self
-                    .output_devices
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "No device".to_string());
-                snarl.insert_node(pos, AudioNode::new_audio_output(default_device));
-                ui.close();
+            if self.output_devices.is_empty() {
+                ui.label("No output devices");
+            } else {
+                for device_name in &self.output_devices.clone() {
+                    if ui.button(device_name).clicked() {
+                        snarl.insert_node(pos, AudioNode::new_audio_output(device_name.clone()));
+                        ui.close();
+                    }
+                }
             }
         });
 

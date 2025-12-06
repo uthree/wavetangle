@@ -22,6 +22,8 @@ struct WavetangleApp {
     /// キャッシュされたデバイスリスト
     input_devices: Vec<String>,
     output_devices: Vec<String>,
+    /// Audio Settings ウィンドウの表示状態
+    show_audio_settings: bool,
 }
 
 impl WavetangleApp {
@@ -36,6 +38,7 @@ impl WavetangleApp {
             graph_processor: AudioGraphProcessor::new(),
             input_devices,
             output_devices,
+            show_audio_settings: false,
         }
     }
 
@@ -66,6 +69,19 @@ impl eframe::App for WavetangleApp {
                     }
                 });
 
+                ui.menu_button("Audio", |ui| {
+                    if ui.button("Settings...").clicked() {
+                        self.show_audio_settings = true;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Refresh Devices").clicked() {
+                        self.input_devices = self.audio_system.input_device_names();
+                        self.output_devices = self.audio_system.output_device_names();
+                        ui.close();
+                    }
+                });
+
                 ui.menu_button("Help", |ui| {
                     if ui.button("About").clicked() {
                         ui.close();
@@ -74,94 +90,88 @@ impl eframe::App for WavetangleApp {
             });
         });
 
-        // サイドパネル - デバイス情報と設定
-        egui::SidePanel::left("device_panel")
-            .resizable(true)
-            .min_width(220.0)
-            .show(ctx, |ui| {
-                // オーディオ設定セクション
-                ui.heading("Audio Settings");
-                ui.separator();
+        // Audio Settings ウィンドウ（独立したOSウィンドウ）
+        if self.show_audio_settings {
+            let mut config = self.audio_system.config();
+            let is_active = self.has_active_audio();
+            let input_devices = self.input_devices.clone();
+            let output_devices = self.output_devices.clone();
 
-                let mut config = self.audio_system.config();
-                let is_active = self.has_active_audio();
-
-                ui.add_enabled_ui(!is_active, |ui| {
-                    // サンプルレート選択
-                    ui.horizontal(|ui| {
-                        ui.label("Sample Rate:");
-                        egui::ComboBox::from_id_salt("sample_rate")
-                            .selected_text(format!("{} Hz", config.sample_rate))
-                            .show_ui(ui, |ui| {
-                                for &rate in SAMPLE_RATES {
-                                    ui.selectable_value(
-                                        &mut config.sample_rate,
-                                        rate,
-                                        format!("{} Hz", rate),
-                                    );
-                                }
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("audio_settings"),
+                egui::ViewportBuilder::default()
+                    .with_title("Audio Settings")
+                    .with_inner_size([300.0, 250.0])
+                    .with_resizable(false),
+                |ctx, _class| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.add_enabled_ui(!is_active, |ui| {
+                            // サンプルレート選択
+                            ui.horizontal(|ui| {
+                                ui.label("Sample Rate:");
+                                egui::ComboBox::from_id_salt("sample_rate")
+                                    .selected_text(format!("{} Hz", config.sample_rate))
+                                    .show_ui(ui, |ui| {
+                                        for &rate in SAMPLE_RATES {
+                                            ui.selectable_value(
+                                                &mut config.sample_rate,
+                                                rate,
+                                                format!("{} Hz", rate),
+                                            );
+                                        }
+                                    });
                             });
+
+                            // バッファサイズ選択
+                            ui.horizontal(|ui| {
+                                ui.label("Buffer Size:");
+                                egui::ComboBox::from_id_salt("buffer_size")
+                                    .selected_text(format!("{}", config.buffer_size))
+                                    .show_ui(ui, |ui| {
+                                        for &size in BUFFER_SIZES {
+                                            ui.selectable_value(
+                                                &mut config.buffer_size,
+                                                size,
+                                                format!("{}", size),
+                                            );
+                                        }
+                                    });
+                            });
+                        });
+
+                        if is_active {
+                            ui.label("(Stop audio to change settings)");
+                        }
+
+                        ui.add_space(10.0);
+                        ui.separator();
+
+                        // デバイス一覧セクション
+                        ui.collapsing("Input Devices", |ui| {
+                            for name in &input_devices {
+                                ui.label(name);
+                            }
+                        });
+
+                        ui.collapsing("Output Devices", |ui| {
+                            for name in &output_devices {
+                                ui.label(name);
+                            }
+                        });
                     });
 
-                    // バッファサイズ選択
-                    ui.horizontal(|ui| {
-                        ui.label("Buffer Size:");
-                        egui::ComboBox::from_id_salt("buffer_size")
-                            .selected_text(format!("{}", config.buffer_size))
-                            .show_ui(ui, |ui| {
-                                for &size in BUFFER_SIZES {
-                                    ui.selectable_value(
-                                        &mut config.buffer_size,
-                                        size,
-                                        format!("{}", size),
-                                    );
-                                }
-                            });
-                    });
-                });
-
-                if is_active {
-                    ui.label("(Stop audio to change settings)");
-                }
-
-                // 設定が変更されたら適用
-                if config != self.audio_system.config() {
-                    self.audio_system.set_config(config);
-                }
-
-                ui.add_space(10.0);
-
-                // デバイス一覧セクション
-                ui.heading("Audio Devices");
-                ui.separator();
-
-                ui.collapsing("Input Devices", |ui| {
-                    for name in &self.input_devices {
-                        ui.label(format!("  {}", name));
+                    // ウィンドウが閉じられたかチェック
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        self.show_audio_settings = false;
                     }
-                });
+                },
+            );
 
-                ui.collapsing("Output Devices", |ui| {
-                    for name in &self.output_devices {
-                        ui.label(format!("  {}", name));
-                    }
-                });
-
-                ui.separator();
-                if ui.button("Refresh Devices").clicked() {
-                    self.input_devices = self.audio_system.input_device_names();
-                    self.output_devices = self.audio_system.output_device_names();
-                }
-
-                ui.add_space(10.0);
-
-                // 操作説明セクション
-                ui.heading("Instructions");
-                ui.separator();
-                ui.label("Right-click to add nodes");
-                ui.label("Drag from pins to connect");
-                ui.label("Right-click node to delete");
-            });
+            // 設定が変更されたら適用
+            if config != self.audio_system.config() {
+                self.audio_system.set_config(config);
+            }
+        }
 
         // メインパネル - ノードグラフ
         egui::CentralPanel::default().show(ctx, |ui| {

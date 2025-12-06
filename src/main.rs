@@ -10,7 +10,7 @@ use egui_snarl::Snarl;
 
 use crate::audio::{AudioSystem, BUFFER_SIZES, SAMPLE_RATES};
 use crate::graph::AudioGraphProcessor;
-use crate::nodes::AudioNode;
+use crate::nodes::{AudioNode, NodeBehavior};
 use crate::viewer::AudioGraphViewer;
 
 /// アプリケーションのメイン状態
@@ -83,6 +83,20 @@ impl WavetangleApp {
     fn has_active_audio(&self) -> bool {
         self.graph_processor.has_active_streams()
     }
+
+    /// すべてのノードを再生開始
+    fn play_all(&mut self) {
+        for (_node_id, node) in self.snarl.nodes_ids_mut() {
+            node.set_active(true);
+        }
+    }
+
+    /// すべてのノードを停止
+    fn stop_all(&mut self) {
+        for (_node_id, node) in self.snarl.nodes_ids_mut() {
+            node.set_active(false);
+        }
+    }
 }
 
 impl eframe::App for WavetangleApp {
@@ -106,6 +120,17 @@ impl eframe::App for WavetangleApp {
                     }
                 });
 
+                ui.menu_button("Transport", |ui| {
+                    if ui.button("Play All").clicked() {
+                        self.play_all();
+                        ui.close();
+                    }
+                    if ui.button("Stop All").clicked() {
+                        self.stop_all();
+                        ui.close();
+                    }
+                });
+
                 ui.menu_button("Audio", |ui| {
                     if ui.button("Settings...").clicked() {
                         self.show_audio_settings = true;
@@ -122,6 +147,18 @@ impl eframe::App for WavetangleApp {
                 ui.menu_button("Help", |ui| {
                     if ui.button("About").clicked() {
                         ui.close();
+                    }
+                });
+
+                // ツールバー領域（右側にトランスポートボタン）
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let is_playing = self.has_active_audio();
+                    if is_playing {
+                        if ui.button("Stop").clicked() {
+                            self.stop_all();
+                        }
+                    } else if ui.button("Play").clicked() {
+                        self.play_all();
                     }
                 });
             });

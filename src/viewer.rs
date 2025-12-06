@@ -200,6 +200,13 @@ impl AudioGraphViewer {
         ui: &mut Ui,
     ) {
         ui.horizontal(|ui| {
+            ui.checkbox(&mut node.is_active, "Active");
+            if node.is_active {
+                ui.label(format!("{}ch", node.channels));
+            }
+        });
+
+        ui.horizontal(|ui| {
             ui.label("Device:");
             egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
                 .selected_text(node.device_name.as_str())
@@ -208,19 +215,6 @@ impl AudioGraphViewer {
                         ui.selectable_value(&mut node.device_name, dev.clone(), dev);
                     }
                 });
-        });
-
-        ui.horizontal(|ui| {
-            if ui
-                .button(if node.is_active { "Stop" } else { "Start" })
-                .clicked()
-            {
-                node.is_active = !node.is_active;
-            }
-
-            if node.is_active {
-                ui.label(format!("{}ch", node.channels));
-            }
         });
     }
 
@@ -231,6 +225,13 @@ impl AudioGraphViewer {
         ui: &mut Ui,
     ) {
         ui.horizontal(|ui| {
+            ui.checkbox(&mut node.is_active, "Active");
+            if node.is_active {
+                ui.label(format!("{}ch", node.channels));
+            }
+        });
+
+        ui.horizontal(|ui| {
             ui.label("Device:");
             egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
                 .selected_text(node.device_name.as_str())
@@ -239,19 +240,6 @@ impl AudioGraphViewer {
                         ui.selectable_value(&mut node.device_name, dev.clone(), dev);
                     }
                 });
-        });
-
-        ui.horizontal(|ui| {
-            if ui
-                .button(if node.is_active { "Stop" } else { "Start" })
-                .clicked()
-            {
-                node.is_active = !node.is_active;
-            }
-
-            if node.is_active {
-                ui.label(format!("{}ch", node.channels));
-            }
         });
     }
 

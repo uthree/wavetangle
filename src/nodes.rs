@@ -85,6 +85,22 @@ pub enum NodeCategory {
     Effect,
 }
 
+/// ノードのサイズ（幅, 高さ）
+#[derive(Clone, Copy, Debug)]
+pub struct NodeSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Default for NodeSize {
+    fn default() -> Self {
+        Self {
+            width: 200.0,
+            height: 150.0,
+        }
+    }
+}
+
 /// すべてのノードが実装するトレイト
 #[allow(dead_code)]
 pub trait NodeBehavior {
@@ -129,6 +145,12 @@ pub trait NodeBehavior {
 
     /// アクティブ状態を設定
     fn set_active(&mut self, active: bool);
+
+    /// ノードのサイズを取得
+    fn node_size(&self) -> NodeSize;
+
+    /// ノードのサイズを設定
+    fn set_node_size(&mut self, size: NodeSize);
 }
 
 /// デフォルトのリングバッファサイズ（サンプル数）
@@ -151,6 +173,8 @@ pub struct AudioInputNode {
     pub spectrum: Arc<Mutex<Vec<f32>>>,
     /// スペクトラムアナライザー（最初のチャンネルを解析）
     pub analyzer: Arc<Mutex<crate::dsp::SpectrumAnalyzer>>,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl Clone for AudioInputNode {
@@ -163,6 +187,7 @@ impl Clone for AudioInputNode {
             show_spectrum: self.show_spectrum,
             spectrum: self.spectrum.clone(),
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            node_size: self.node_size,
         }
     }
 }
@@ -181,6 +206,7 @@ impl AudioInputNode {
             show_spectrum: true,
             spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            node_size: NodeSize::default(),
         }
     }
 
@@ -276,6 +302,14 @@ impl NodeBehavior for AudioInputNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -295,6 +329,8 @@ pub struct AudioOutputNode {
     pub spectrum: Arc<Mutex<Vec<f32>>>,
     /// スペクトラムアナライザー（最初のチャンネルを解析）
     pub analyzer: Arc<Mutex<crate::dsp::SpectrumAnalyzer>>,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl Clone for AudioOutputNode {
@@ -307,6 +343,7 @@ impl Clone for AudioOutputNode {
             show_spectrum: self.show_spectrum,
             spectrum: self.spectrum.clone(),
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            node_size: self.node_size,
         }
     }
 }
@@ -325,6 +362,7 @@ impl AudioOutputNode {
             show_spectrum: true,
             spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            node_size: NodeSize::default(),
         }
     }
 
@@ -421,6 +459,14 @@ impl NodeBehavior for AudioOutputNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -438,6 +484,8 @@ pub struct GainNode {
     pub output_buffer: ChannelBuffer,
     /// アクティブ状態
     pub is_active: bool,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl GainNode {
@@ -447,6 +495,7 @@ impl GainNode {
             input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
+            node_size: NodeSize::default(),
         }
     }
 }
@@ -533,6 +582,14 @@ impl NodeBehavior for GainNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -546,6 +603,8 @@ pub struct AddNode {
     pub input_buffers: Vec<ChannelBuffer>,
     pub output_buffer: ChannelBuffer,
     pub is_active: bool,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl AddNode {
@@ -557,6 +616,7 @@ impl AddNode {
             ], // 2入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
+            node_size: NodeSize::default(),
         }
     }
 }
@@ -641,6 +701,14 @@ impl NodeBehavior for AddNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -654,6 +722,8 @@ pub struct MultiplyNode {
     pub input_buffers: Vec<ChannelBuffer>,
     pub output_buffer: ChannelBuffer,
     pub is_active: bool,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl MultiplyNode {
@@ -665,6 +735,7 @@ impl MultiplyNode {
             ], // 2入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
+            node_size: NodeSize::default(),
         }
     }
 }
@@ -749,6 +820,14 @@ impl NodeBehavior for MultiplyNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -780,6 +859,8 @@ pub struct FilterNode {
     /// 現在のフィルター係数（キャッシュ用）
     #[allow(dead_code)]
     pub biquad_coeffs: Arc<Mutex<Option<crate::dsp::BiquadCoeffs>>>,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl FilterNode {
@@ -793,6 +874,7 @@ impl FilterNode {
             is_active: false,
             biquad_state: Arc::new(Mutex::new(crate::dsp::BiquadState::new())),
             biquad_coeffs: Arc::new(Mutex::new(None)),
+            node_size: NodeSize::default(),
         }
     }
 
@@ -889,6 +971,14 @@ impl NodeBehavior for FilterNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -910,6 +1000,8 @@ pub struct SpectrumAnalyzerNode {
     pub is_active: bool,
     /// FFTアナライザー（スレッドセーフ）
     pub analyzer: Arc<Mutex<crate::dsp::SpectrumAnalyzer>>,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl Clone for SpectrumAnalyzerNode {
@@ -920,6 +1012,7 @@ impl Clone for SpectrumAnalyzerNode {
             output_buffer: self.output_buffer.clone(),
             is_active: self.is_active,
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            node_size: self.node_size,
         }
     }
 }
@@ -932,6 +1025,7 @@ impl SpectrumAnalyzerNode {
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            node_size: NodeSize::default(),
         }
     }
 
@@ -1025,6 +1119,14 @@ impl NodeBehavior for SpectrumAnalyzerNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -1053,6 +1155,8 @@ pub struct CompressorNode {
     /// 現在のゲインリダクション (dB) - メーター表示用
     #[allow(dead_code)]
     pub gain_reduction: Arc<Mutex<f32>>,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl CompressorNode {
@@ -1068,6 +1172,7 @@ impl CompressorNode {
             is_active: false,
             compressor_state: Arc::new(Mutex::new(crate::dsp::CompressorState::new())),
             gain_reduction: Arc::new(Mutex::new(0.0)),
+            node_size: NodeSize::default(),
         }
     }
 }
@@ -1152,6 +1257,14 @@ impl NodeBehavior for CompressorNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -1170,6 +1283,8 @@ pub struct PitchShiftNode {
     pub is_active: bool,
     /// ピッチシフター（スレッドセーフ）
     pub pitch_shifter: Arc<Mutex<crate::dsp::PitchShifter>>,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl Clone for PitchShiftNode {
@@ -1180,6 +1295,7 @@ impl Clone for PitchShiftNode {
             output_buffer: self.output_buffer.clone(),
             is_active: self.is_active,
             pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::new(44100.0))),
+            node_size: self.node_size,
         }
     }
 }
@@ -1192,6 +1308,7 @@ impl PitchShiftNode {
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::new(44100.0))),
+            node_size: NodeSize::default(),
         }
     }
 }
@@ -1276,6 +1393,14 @@ impl NodeBehavior for PitchShiftNode {
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
     }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
+    }
 }
 
 // ============================================================================
@@ -1298,6 +1423,8 @@ pub struct GraphicEqNode {
     pub show_spectrum: bool,
     /// スペクトラムデータ（入力信号）
     pub spectrum: Arc<Mutex<Vec<f32>>>,
+    /// ノードのサイズ
+    pub node_size: NodeSize,
 }
 
 impl Clone for GraphicEqNode {
@@ -1310,6 +1437,7 @@ impl Clone for GraphicEqNode {
             graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
             show_spectrum: self.show_spectrum,
             spectrum: self.spectrum.clone(),
+            node_size: self.node_size,
         }
     }
 }
@@ -1332,6 +1460,7 @@ impl GraphicEqNode {
             graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
             show_spectrum: true,
             spectrum: Arc::new(Mutex::new(vec![0.0; EQ_FFT_SIZE / 2])),
+            node_size: NodeSize::default(),
         }
     }
 
@@ -1424,6 +1553,14 @@ impl NodeBehavior for GraphicEqNode {
 
     fn set_active(&mut self, active: bool) {
         self.is_active = active;
+    }
+
+    fn node_size(&self) -> NodeSize {
+        self.node_size
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        self.node_size = size;
     }
 }
 
@@ -1540,6 +1677,25 @@ impl NodeBehavior for AudioNode {
             AudioNode::Compressor(node) => node.set_active(active),
             AudioNode::PitchShift(node) => node.set_active(active),
             AudioNode::GraphicEq(node) => node.set_active(active),
+        }
+    }
+
+    fn node_size(&self) -> NodeSize {
+        delegate_node_behavior!(self, node_size)
+    }
+
+    fn set_node_size(&mut self, size: NodeSize) {
+        match self {
+            AudioNode::AudioInput(node) => node.set_node_size(size),
+            AudioNode::AudioOutput(node) => node.set_node_size(size),
+            AudioNode::Gain(node) => node.set_node_size(size),
+            AudioNode::Add(node) => node.set_node_size(size),
+            AudioNode::Multiply(node) => node.set_node_size(size),
+            AudioNode::Filter(node) => node.set_node_size(size),
+            AudioNode::SpectrumAnalyzer(node) => node.set_node_size(size),
+            AudioNode::Compressor(node) => node.set_node_size(size),
+            AudioNode::PitchShift(node) => node.set_node_size(size),
+            AudioNode::GraphicEq(node) => node.set_node_size(size),
         }
     }
 }

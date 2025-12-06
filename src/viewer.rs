@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use egui::{Color32, Ui};
+use egui::{Color32, CursorIcon, Sense, Ui, Vec2};
 use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints, Points};
 use egui_snarl::ui::{PinInfo, SnarlPin, SnarlViewer};
 use egui_snarl::{InPin, NodeId, OutPin, Snarl};
 use parking_lot::Mutex;
 
 use crate::dsp::EqPoint;
-use crate::nodes::{AudioNode, FilterType, NodeBehavior, PinType, FFT_SIZE};
+use crate::nodes::{AudioNode, FilterType, NodeBehavior, NodeSize, PinType, FFT_SIZE};
 
 /// ピンタイプに応じた色を取得
 fn pin_color(pin_type: PinType) -> Color32 {
@@ -38,8 +38,63 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
     )
 }
 
+/// リサイズハンドルを表示し、ドラッグによるサイズ変更を処理
+/// 戻り値: 新しいサイズ（変更があった場合）
+fn show_resize_handle(ui: &mut Ui, node_size: &mut NodeSize) {
+    const HANDLE_SIZE: f32 = 12.0;
+    const MIN_WIDTH: f32 = 100.0;
+    const MIN_HEIGHT: f32 = 80.0;
+    const MAX_WIDTH: f32 = 600.0;
+    const MAX_HEIGHT: f32 = 400.0;
+
+    // 現在のUI領域の右下にリサイズハンドルを配置
+    ui.horizontal(|ui| {
+        ui.add_space(node_size.width - HANDLE_SIZE);
+        let (rect, response) = ui.allocate_exact_size(Vec2::splat(HANDLE_SIZE), Sense::drag());
+
+        // リサイズグリップを描画
+        let visuals = ui.style().interact(&response);
+        let color = if response.hovered() || response.dragged() {
+            visuals.fg_stroke.color
+        } else {
+            Color32::from_gray(120)
+        };
+
+        // 三角形のグリップを描画
+        let painter = ui.painter();
+        let points = [
+            rect.right_bottom(),
+            rect.right_bottom() - Vec2::new(HANDLE_SIZE, 0.0),
+            rect.right_bottom() - Vec2::new(0.0, HANDLE_SIZE),
+        ];
+        painter.add(egui::Shape::convex_polygon(
+            points.to_vec(),
+            color,
+            egui::Stroke::NONE,
+        ));
+
+        // カーソルアイコンを変更
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeNwSe);
+        }
+
+        // ドラッグでサイズ変更
+        if response.dragged() {
+            let delta = response.drag_delta();
+            node_size.width = (node_size.width + delta.x).clamp(MIN_WIDTH, MAX_WIDTH);
+            node_size.height = (node_size.height + delta.y).clamp(MIN_HEIGHT, MAX_HEIGHT);
+        }
+    });
+}
+
 /// スペクトラムを折れ線グラフで表示（dBスケール、周波数目盛付き）
-fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>>) {
+fn show_spectrum_line(
+    ui: &mut Ui,
+    plot_id: &str,
+    spectrum: &Arc<Mutex<Vec<f32>>>,
+    width: f32,
+    height: f32,
+) {
     let spectrum_data = spectrum.lock();
     let point_count = 100;
     let spectrum_len = spectrum_data.len();
@@ -82,8 +137,8 @@ fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>
 
     // egui_plotで折れ線グラフを表示
     Plot::new(plot_id)
-        .height(100.0)
-        .width(200.0)
+        .height(height)
+        .width(width)
         .show_axes([true, true])
         .show_grid([true, true])
         .allow_zoom(false)
@@ -368,7 +423,10 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::AudioInputNode,
         ui: &mut Ui,
     ) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             ui.horizontal(|ui| {
                 ui.checkbox(&mut node.is_active, "Active");
                 if node.is_active {
@@ -378,7 +436,7 @@ impl AudioGraphViewer {
 
             egui::ComboBox::from_id_salt(format!("input_device_{:?}", node_id))
                 .selected_text(node.device_name.as_str())
-                .width(150.0)
+                .width(node_size.width - 20.0)
                 .show_ui(ui, |ui| {
                     for dev in &self.input_devices {
                         ui.selectable_value(&mut node.device_name, dev.clone(), dev);
@@ -389,13 +447,19 @@ impl AudioGraphViewer {
             if node.is_active {
                 ui.checkbox(&mut node.show_spectrum, "Spectrum");
                 if node.show_spectrum {
+                    let spectrum_height = (node_size.height - 80.0).max(60.0);
                     show_spectrum_line(
                         ui,
                         &format!("input_spectrum_{:?}", node_id),
                         &node.spectrum,
+                        node_size.width - 10.0,
+                        spectrum_height,
                     );
                 }
             }
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
@@ -405,7 +469,10 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::AudioOutputNode,
         ui: &mut Ui,
     ) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             ui.horizontal(|ui| {
                 ui.checkbox(&mut node.is_active, "Active");
                 if node.is_active {
@@ -415,7 +482,7 @@ impl AudioGraphViewer {
 
             egui::ComboBox::from_id_salt(format!("output_device_{:?}", node_id))
                 .selected_text(node.device_name.as_str())
-                .width(150.0)
+                .width(node_size.width - 20.0)
                 .show_ui(ui, |ui| {
                     for dev in &self.output_devices {
                         ui.selectable_value(&mut node.device_name, dev.clone(), dev);
@@ -426,50 +493,79 @@ impl AudioGraphViewer {
             if node.is_active {
                 ui.checkbox(&mut node.show_spectrum, "Spectrum");
                 if node.show_spectrum {
+                    let spectrum_height = (node_size.height - 80.0).max(60.0);
                     show_spectrum_line(
                         ui,
                         &format!("output_spectrum_{:?}", node_id),
                         &node.spectrum,
+                        node_size.width - 10.0,
+                        spectrum_height,
                     );
                 }
             }
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
     fn show_gain_body(&self, _node_id: NodeId, node: &mut crate::nodes::GainNode, ui: &mut Ui) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             ui.label("Gain:");
-            ui.add(egui::Slider::new(&mut node.gain, 0.0..=2.0).suffix("x"));
+            ui.add(
+                egui::Slider::new(&mut node.gain, 0.0..=2.0)
+                    .suffix("x")
+                    .min_decimals(2),
+            );
 
             // dB表示
             let db = 20.0 * node.gain.log10();
             if db.is_finite() {
                 ui.label(format!("{:.1} dB", db));
             } else {
-                ui.label("-∞ dB");
+                ui.label("-inf dB");
             }
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
-    fn show_add_body(&self, _node_id: NodeId, _node: &mut crate::nodes::AddNode, ui: &mut Ui) {
+    fn show_add_body(&self, _node_id: NodeId, node: &mut crate::nodes::AddNode, ui: &mut Ui) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
             ui.label("A + B");
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
     fn show_multiply_body(
         &self,
         _node_id: NodeId,
-        _node: &mut crate::nodes::MultiplyNode,
+        node: &mut crate::nodes::MultiplyNode,
         ui: &mut Ui,
     ) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
-            ui.label("A × B");
+            ui.set_min_width(node_size.width);
+            ui.label("A x B");
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
     fn show_filter_body(&self, node_id: NodeId, node: &mut crate::nodes::FilterNode, ui: &mut Ui) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             ui.label("Type:");
             egui::ComboBox::from_id_salt(format!("filter_type_{:?}", node_id))
                 .selected_text(match node.filter_type {
@@ -492,6 +588,9 @@ impl AudioGraphViewer {
 
             ui.label("Q:");
             ui.add(egui::Slider::new(&mut node.resonance, 0.1..=10.0));
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
@@ -501,7 +600,10 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::SpectrumAnalyzerNode,
         ui: &mut Ui,
     ) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             // スペクトラムデータを取得
             let spectrum = node.spectrum.lock();
             let bar_count = 48; // 表示するバーの数
@@ -541,9 +643,10 @@ impl AudioGraphViewer {
             drop(spectrum); // ロックを解放
 
             // egui_plotでバーチャートを表示
+            let plot_height = (node_size.height - 30.0).max(60.0);
             Plot::new(format!("spectrum_{:?}", node_id))
-                .height(100.0)
-                .width(220.0)
+                .height(plot_height)
+                .width(node_size.width - 10.0)
                 .show_axes([false, false])
                 .show_grid([false, false])
                 .allow_zoom(false)
@@ -555,6 +658,9 @@ impl AudioGraphViewer {
                 .show(ui, |plot_ui| {
                     plot_ui.bar_chart(BarChart::new("spectrum", bars));
                 });
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
@@ -564,7 +670,10 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::CompressorNode,
         ui: &mut Ui,
     ) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             ui.label("Threshold:");
             ui.add(egui::Slider::new(&mut node.threshold, -60.0..=0.0).suffix(" dB"));
 
@@ -579,6 +688,9 @@ impl AudioGraphViewer {
 
             ui.label("Makeup:");
             ui.add(egui::Slider::new(&mut node.makeup_gain, 0.0..=24.0).suffix(" dB"));
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
@@ -588,7 +700,10 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::PitchShiftNode,
         ui: &mut Ui,
     ) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             ui.label("Semitones:");
             ui.add(egui::Slider::new(&mut node.semitones, -12.0..=12.0).suffix(" st"));
 
@@ -600,6 +715,9 @@ impl AudioGraphViewer {
             } else {
                 ui.label(format!("{:+} semitones", semitones_int));
             }
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 
@@ -609,7 +727,10 @@ impl AudioGraphViewer {
         node: &mut crate::nodes::GraphicEqNode,
         ui: &mut Ui,
     ) {
+        let node_size = node.node_size;
         ui.vertical(|ui| {
+            ui.set_min_width(node_size.width);
+
             // スペクトラム表示トグル
             ui.checkbox(&mut node.show_spectrum, "Show Spectrum");
 
@@ -678,9 +799,10 @@ impl AudioGraphViewer {
             };
 
             // プロット表示
+            let plot_height = (node_size.height - 80.0).max(100.0);
             let plot_response = Plot::new(format!("graphic_eq_{:?}", node_id))
-                .height(150.0)
-                .width(280.0)
+                .height(plot_height)
+                .width(node_size.width - 10.0)
                 .allow_zoom(false)
                 .allow_scroll(false)
                 .allow_drag(false)
@@ -799,6 +921,9 @@ impl AudioGraphViewer {
                 let mut eq = node.graphic_eq.lock();
                 eq.update_curve(&node.eq_points);
             }
+
+            // リサイズハンドル
+            show_resize_handle(ui, &mut node.node_size);
         });
     }
 

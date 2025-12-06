@@ -27,7 +27,44 @@ struct WavetangleApp {
 }
 
 impl WavetangleApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // 日本語フォントの設定
+        let mut fonts = egui::FontDefinitions::default();
+
+        // システムフォントから日本語対応フォントを追加
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(font_data) = std::fs::read("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc")
+            {
+                fonts.font_data.insert(
+                    "japanese".to_owned(),
+                    std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+                );
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .push("japanese".to_owned());
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(font_data) = std::fs::read("C:\\Windows\\Fonts\\msgothic.ttc") {
+                fonts.font_data.insert(
+                    "japanese".to_owned(),
+                    std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+                );
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .push("japanese".to_owned());
+            }
+        }
+
+        cc.egui_ctx.set_fonts(fonts);
+
         let audio_system = AudioSystem::new();
         let input_devices = audio_system.input_device_names();
         let output_devices = audio_system.output_device_names();

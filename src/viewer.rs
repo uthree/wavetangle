@@ -38,13 +38,22 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
     )
 }
 
-/// スペクトラムを折れ線グラフで表示
+/// スペクトラムを折れ線グラフで表示（dBスケール、周波数目盛付き）
 fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>>) {
     let spectrum_data = spectrum.lock();
     let point_count = 100;
     let spectrum_len = spectrum_data.len();
 
-    // ラインデータを作成
+    // 周波数範囲（対数スケール）
+    const MIN_FREQ: f64 = 20.0;
+    const MAX_FREQ: f64 = 20000.0;
+    const MIN_DB: f64 = -80.0;
+    const MAX_DB: f64 = 0.0;
+
+    // X座標を対数周波数に変換
+    let x_to_freq = |x: f64| -> f64 { MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(x) };
+
+    // ラインデータを作成（X: 0-1の正規化値、Y: dB値）
     let points: Vec<[f64; 2]> = (0..point_count)
         .map(|i| {
             let x = i as f64 / point_count as f64;
@@ -52,7 +61,7 @@ fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>
             let freq_idx = (x.powf(2.0) * spectrum_len as f64) as usize;
             let freq_idx = freq_idx.min(spectrum_len.saturating_sub(1));
 
-            // マグニチュードを正規化（対数スケール、dB変換）
+            // マグニチュードをdBに変換
             let magnitude = if freq_idx < spectrum_data.len() {
                 spectrum_data[freq_idx]
             } else {
@@ -61,12 +70,11 @@ fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>
             let db = if magnitude > 1e-6 {
                 20.0 * (magnitude as f64).log10()
             } else {
-                -80.0
+                MIN_DB
             };
-            // -80dB〜0dBを0.0〜1.0にマッピング
-            let normalized = ((db + 80.0) / 80.0).clamp(0.0, 1.0);
+            let db_clamped = db.clamp(MIN_DB, MAX_DB);
 
-            [x, normalized]
+            [x, db_clamped]
         })
         .collect();
 
@@ -74,17 +82,26 @@ fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>
 
     // egui_plotで折れ線グラフを表示
     Plot::new(plot_id)
-        .height(80.0)
-        .width(180.0)
-        .show_axes([false, true])
+        .height(100.0)
+        .width(200.0)
+        .show_axes([true, true])
         .show_grid([true, true])
         .allow_zoom(false)
         .allow_drag(false)
         .allow_scroll(false)
         .include_x(0.0)
         .include_x(1.0)
-        .include_y(0.0)
-        .include_y(1.0)
+        .include_y(MIN_DB)
+        .include_y(MAX_DB)
+        .x_axis_formatter(move |grid_mark, _range| {
+            let freq = x_to_freq(grid_mark.value);
+            if freq >= 1000.0 {
+                format!("{:.0}k", freq / 1000.0)
+            } else {
+                format!("{:.0}", freq)
+            }
+        })
+        .y_axis_formatter(|grid_mark, _range| format!("{:.0}dB", grid_mark.value))
         .show(ui, |plot_ui| {
             plot_ui.line(
                 Line::new("spectrum", PlotPoints::from(points))
@@ -668,14 +685,21 @@ impl AudioGraphViewer {
                 .allow_scroll(false)
                 .allow_drag(false)
                 .allow_boxed_zoom(false)
-                .show_axes([false, true])
+                .show_axes([true, true])
                 .show_grid([true, true])
                 .include_x(0.0)
                 .include_x(1.0)
                 .include_y(MIN_GAIN)
                 .include_y(MAX_GAIN)
-                .x_axis_label("Freq")
-                .y_axis_label("dB")
+                .x_axis_formatter(move |grid_mark, _range| {
+                    let freq = x_to_freq(grid_mark.value);
+                    if freq >= 1000.0 {
+                        format!("{:.0}k", freq / 1000.0)
+                    } else {
+                        format!("{:.0}", freq)
+                    }
+                })
+                .y_axis_formatter(|grid_mark, _range| format!("{:.0}dB", grid_mark.value))
                 .show(ui, |plot_ui| {
                     // スペクトラム（背景として表示）
                     if node.show_spectrum && !spectrum_points.is_empty() {

@@ -406,6 +406,87 @@ impl PitchShifter {
         self.input_buffer[idx0] * (1.0 - frac) + self.input_buffer[idx1] * frac
     }
 
+    /// 2つの位置間の相互相関を計算（サブサンプリングで高速化）
+    fn compute_correlation(&self, pos1: f64, pos2: f64, length: usize) -> f32 {
+        const SUBSAMPLE_STEP: usize = 4; // 4サンプルごとに計算
+        let mut correlation = 0.0f32;
+
+        for i in (0..length).step_by(SUBSAMPLE_STEP) {
+            let sample1 = self.interpolate(pos1 + i as f64);
+            let sample2 = self.interpolate(pos2 + i as f64);
+            correlation += sample1 * sample2;
+        }
+
+        correlation
+    }
+
+    /// 参照グレインとの相互相関が最大になる位置を探索
+    fn find_best_alignment(&self, base_pos: f64, reference_pos: f64) -> f64 {
+        const SEARCH_RANGE: i32 = (GRAIN_SIZE / 4) as i32; // 探索範囲
+        const SEARCH_STEP: i32 = 4; // 探索ステップ
+        const CORRELATION_LENGTH: usize = GRAIN_SIZE / 2; // 相関計算に使うサンプル数
+
+        let mut best_pos = base_pos;
+        let mut best_correlation = f32::MIN;
+
+        // 粗い探索
+        for offset in (-SEARCH_RANGE..=SEARCH_RANGE).step_by(SEARCH_STEP as usize) {
+            let candidate_pos = base_pos + offset as f64;
+            let correlation =
+                self.compute_correlation(candidate_pos, reference_pos, CORRELATION_LENGTH);
+
+            if correlation > best_correlation {
+                best_correlation = correlation;
+                best_pos = candidate_pos;
+            }
+        }
+
+        // 細かい探索（粗い探索で見つかった位置の周辺）
+        let fine_base = best_pos;
+        for offset in -SEARCH_STEP..=SEARCH_STEP {
+            let candidate_pos = fine_base + offset as f64;
+            let correlation =
+                self.compute_correlation(candidate_pos, reference_pos, CORRELATION_LENGTH);
+
+            if correlation > best_correlation {
+                best_correlation = correlation;
+                best_pos = candidate_pos;
+            }
+        }
+
+        best_pos.rem_euclid(PITCH_BUFFER_SIZE as f64)
+    }
+
+    /// 現在最も位相が進んでいるグレインのインデックスを取得
+    fn find_reference_grain(&self, exclude_idx: usize) -> Option<usize> {
+        let mut best_idx = None;
+        let mut best_phase = -1.0;
+
+        for i in 0..NUM_GRAINS {
+            if i == exclude_idx {
+                continue;
+            }
+            // 位相が0.3〜0.7の範囲にあるグレインを優先（窓関数の中央部分）
+            let phase = self.grain_phase[i];
+            if phase > 0.3 && phase < 0.7 && phase > best_phase {
+                best_phase = phase;
+                best_idx = Some(i);
+            }
+        }
+
+        // 見つからなければ、除外以外で最大の位相を持つものを選択
+        if best_idx.is_none() {
+            for i in 0..NUM_GRAINS {
+                if i == exclude_idx && self.grain_phase[i] > best_phase {
+                    best_phase = self.grain_phase[i];
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        best_idx
+    }
+
     /// サンプルを処理
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
         let grain_size_f = GRAIN_SIZE as f64;
@@ -446,10 +527,21 @@ impl PitchShifter {
                 // グレインが終了したら次の位置にリセット
                 if self.grain_phase[grain_idx] >= 1.0 {
                     self.grain_phase[grain_idx] -= 1.0;
-                    // 新しいグレインの開始位置を現在の書き込み位置の少し手前に設定
+
+                    // ベースとなる開始位置（書き込み位置の手前）
                     let offset = (GRAIN_SIZE * NUM_GRAINS / 2) as f64;
-                    self.grain_read_pos[grain_idx] =
+                    let base_pos =
                         (self.write_pos as f64 - offset).rem_euclid(PITCH_BUFFER_SIZE as f64);
+
+                    // 参照グレインを探して位相アラインメントを適用
+                    let aligned_pos = if let Some(ref_idx) = self.find_reference_grain(grain_idx) {
+                        let ref_pos = self.grain_read_pos[ref_idx];
+                        self.find_best_alignment(base_pos, ref_pos)
+                    } else {
+                        base_pos
+                    };
+
+                    self.grain_read_pos[grain_idx] = aligned_pos;
                 }
             }
 

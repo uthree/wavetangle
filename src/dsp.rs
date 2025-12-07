@@ -320,23 +320,29 @@ impl Default for SpectrumAnalyzer {
     }
 }
 
-/// ピッチシフトのバッファサイズ
-pub const PITCH_BUFFER_SIZE: usize = 16384;
-/// グレインサイズ（サンプル数）
-const GRAIN_SIZE: usize = 1024;
-/// オーバーラップ数
-const NUM_GRAINS: usize = 4;
+/// デフォルトのバッファサイズ
+pub const DEFAULT_PITCH_BUFFER_SIZE: usize = 16384;
+/// デフォルトのグレインサイズ
+pub const DEFAULT_GRAIN_SIZE: usize = 1024;
+/// デフォルトのグレイン数
+pub const DEFAULT_NUM_GRAINS: usize = 4;
 
 /// グラニュラー合成ベースのピッチシフター
 pub struct PitchShifter {
     /// 入力リングバッファ
     input_buffer: Vec<f32>,
+    /// バッファサイズ
+    buffer_size: usize,
+    /// グレインサイズ
+    grain_size: usize,
+    /// グレイン数
+    num_grains: usize,
     /// 入力書き込み位置
     write_pos: usize,
     /// 各グレインの読み取り位置（浮動小数点）
-    grain_read_pos: [f64; NUM_GRAINS],
+    grain_read_pos: Vec<f64>,
     /// 各グレインの位相（0.0〜1.0）
-    grain_phase: [f64; NUM_GRAINS],
+    grain_phase: Vec<f64>,
     /// ピッチシフト量（1.0 = 変化なし、2.0 = 1オクターブ上）
     pitch_ratio: f32,
     /// サンプルカウンター
@@ -346,42 +352,150 @@ pub struct PitchShifter {
 }
 
 impl PitchShifter {
+    /// デフォルトパラメータで作成
     pub fn new(_sample_rate: f32) -> Self {
+        Self::with_params(
+            _sample_rate,
+            DEFAULT_GRAIN_SIZE,
+            DEFAULT_NUM_GRAINS,
+            DEFAULT_PITCH_BUFFER_SIZE,
+        )
+    }
+
+    /// カスタムパラメータで作成
+    pub fn with_params(
+        _sample_rate: f32,
+        grain_size: usize,
+        num_grains: usize,
+        buffer_size: usize,
+    ) -> Self {
+        // パラメータの妥当性を確認
+        let grain_size = grain_size.clamp(128, 8192);
+        let num_grains = num_grains.clamp(2, 16);
+        // バッファサイズはグレインサイズ×グレイン数×4以上必要
+        let min_buffer_size = grain_size * num_grains * 4;
+        let buffer_size = buffer_size.max(min_buffer_size);
+
         // ハン窓を生成
-        let window: Vec<f32> = (0..GRAIN_SIZE)
+        let window: Vec<f32> = (0..grain_size)
             .map(|i| {
-                let t = i as f32 / GRAIN_SIZE as f32;
+                let t = i as f32 / grain_size as f32;
                 0.5 * (1.0 - (2.0 * PI * t).cos())
             })
             .collect();
 
         // グレインを均等に配置（位相）
-        let mut grain_phase = [0.0; NUM_GRAINS];
+        let mut grain_phase = vec![0.0; num_grains];
         for (i, phase) in grain_phase.iter_mut().enumerate() {
-            *phase = i as f64 / NUM_GRAINS as f64;
+            *phase = i as f64 / num_grains as f64;
         }
 
         // 初期書き込み位置
-        let write_pos = PITCH_BUFFER_SIZE / 2;
+        let write_pos = buffer_size / 2;
 
         // グレインの読み取り位置を書き込み位置の手前に設定
-        // 各グレインは位相に応じてオフセットされる
-        let grain_spacing = GRAIN_SIZE / NUM_GRAINS;
-        let mut grain_read_pos = [0.0; NUM_GRAINS];
+        let grain_spacing = grain_size / num_grains;
+        let mut grain_read_pos = vec![0.0; num_grains];
         for (i, read_pos) in grain_read_pos.iter_mut().enumerate() {
-            // 書き込み位置の手前からスタートし、各グレインをずらす
-            let offset = GRAIN_SIZE + (i * grain_spacing);
-            *read_pos = (write_pos as f64 - offset as f64).rem_euclid(PITCH_BUFFER_SIZE as f64);
+            let offset = grain_size + (i * grain_spacing);
+            *read_pos = (write_pos as f64 - offset as f64).rem_euclid(buffer_size as f64);
         }
 
         Self {
-            input_buffer: vec![0.0; PITCH_BUFFER_SIZE],
+            input_buffer: vec![0.0; buffer_size],
+            buffer_size,
+            grain_size,
+            num_grains,
             write_pos,
             grain_read_pos,
             grain_phase,
             pitch_ratio: 1.0,
             sample_count: 0,
             window,
+        }
+    }
+
+    /// グレインサイズを取得
+    #[allow(dead_code)]
+    pub fn grain_size(&self) -> usize {
+        self.grain_size
+    }
+
+    /// グレイン数を取得
+    #[allow(dead_code)]
+    pub fn num_grains(&self) -> usize {
+        self.num_grains
+    }
+
+    /// バッファサイズを取得
+    #[allow(dead_code)]
+    pub fn buffer_size(&self) -> usize {
+        self.buffer_size
+    }
+
+    /// グレインサイズを設定（内部状態がリセットされる）
+    pub fn set_grain_size(&mut self, grain_size: usize) {
+        let grain_size = grain_size.clamp(128, 8192);
+        if grain_size != self.grain_size {
+            self.rebuild_with_params(grain_size, self.num_grains, self.buffer_size);
+        }
+    }
+
+    /// グレイン数を設定（内部状態がリセットされる）
+    pub fn set_num_grains(&mut self, num_grains: usize) {
+        let num_grains = num_grains.clamp(2, 16);
+        if num_grains != self.num_grains {
+            self.rebuild_with_params(self.grain_size, num_grains, self.buffer_size);
+        }
+    }
+
+    /// バッファサイズを設定（内部状態がリセットされる）
+    #[allow(dead_code)]
+    pub fn set_buffer_size(&mut self, buffer_size: usize) {
+        let min_buffer_size = self.grain_size * self.num_grains * 4;
+        let buffer_size = buffer_size.max(min_buffer_size);
+        if buffer_size != self.buffer_size {
+            self.rebuild_with_params(self.grain_size, self.num_grains, buffer_size);
+        }
+    }
+
+    /// パラメータを変更して内部バッファを再構築
+    fn rebuild_with_params(&mut self, grain_size: usize, num_grains: usize, buffer_size: usize) {
+        let min_buffer_size = grain_size * num_grains * 4;
+        let buffer_size = buffer_size.max(min_buffer_size);
+
+        self.grain_size = grain_size;
+        self.num_grains = num_grains;
+        self.buffer_size = buffer_size;
+
+        // バッファを再割り当て
+        self.input_buffer = vec![0.0; buffer_size];
+
+        // 窓関数を再生成
+        self.window = (0..grain_size)
+            .map(|i| {
+                let t = i as f32 / grain_size as f32;
+                0.5 * (1.0 - (2.0 * PI * t).cos())
+            })
+            .collect();
+
+        // グレイン配列を再割り当て
+        self.grain_phase = vec![0.0; num_grains];
+        self.grain_read_pos = vec![0.0; num_grains];
+
+        // 状態をリセット
+        self.write_pos = buffer_size / 2;
+        self.sample_count = 0;
+
+        // グレインを均等に再配置
+        for (i, phase) in self.grain_phase.iter_mut().enumerate() {
+            *phase = i as f64 / num_grains as f64;
+        }
+
+        let grain_spacing = grain_size / num_grains;
+        for (i, read_pos) in self.grain_read_pos.iter_mut().enumerate() {
+            let offset = grain_size + (i * grain_spacing);
+            *read_pos = (self.write_pos as f64 - offset as f64).rem_euclid(buffer_size as f64);
         }
     }
 
@@ -398,9 +512,9 @@ impl PitchShifter {
 
     /// 線形補間でサンプルを取得
     fn interpolate(&self, pos: f64) -> f32 {
-        let pos_mod = pos.rem_euclid(PITCH_BUFFER_SIZE as f64);
+        let pos_mod = pos.rem_euclid(self.buffer_size as f64);
         let idx0 = pos_mod.floor() as usize;
-        let idx1 = (idx0 + 1) % PITCH_BUFFER_SIZE;
+        let idx1 = (idx0 + 1) % self.buffer_size;
         let frac = (pos_mod - idx0 as f64) as f32;
 
         self.input_buffer[idx0] * (1.0 - frac) + self.input_buffer[idx1] * frac
@@ -422,18 +536,18 @@ impl PitchShifter {
 
     /// 参照グレインとの相互相関が最大になる位置を探索
     fn find_best_alignment(&self, base_pos: f64, reference_pos: f64) -> f64 {
-        const SEARCH_RANGE: i32 = (GRAIN_SIZE / 4) as i32; // 探索範囲
+        let search_range = (self.grain_size / 4) as i32; // 探索範囲
         const SEARCH_STEP: i32 = 4; // 探索ステップ
-        const CORRELATION_LENGTH: usize = GRAIN_SIZE / 2; // 相関計算に使うサンプル数
+        let correlation_length = self.grain_size / 2; // 相関計算に使うサンプル数
 
         let mut best_pos = base_pos;
         let mut best_correlation = f32::MIN;
 
         // 粗い探索
-        for offset in (-SEARCH_RANGE..=SEARCH_RANGE).step_by(SEARCH_STEP as usize) {
+        for offset in (-search_range..=search_range).step_by(SEARCH_STEP as usize) {
             let candidate_pos = base_pos + offset as f64;
             let correlation =
-                self.compute_correlation(candidate_pos, reference_pos, CORRELATION_LENGTH);
+                self.compute_correlation(candidate_pos, reference_pos, correlation_length);
 
             if correlation > best_correlation {
                 best_correlation = correlation;
@@ -446,7 +560,7 @@ impl PitchShifter {
         for offset in -SEARCH_STEP..=SEARCH_STEP {
             let candidate_pos = fine_base + offset as f64;
             let correlation =
-                self.compute_correlation(candidate_pos, reference_pos, CORRELATION_LENGTH);
+                self.compute_correlation(candidate_pos, reference_pos, correlation_length);
 
             if correlation > best_correlation {
                 best_correlation = correlation;
@@ -454,7 +568,7 @@ impl PitchShifter {
             }
         }
 
-        best_pos.rem_euclid(PITCH_BUFFER_SIZE as f64)
+        best_pos.rem_euclid(self.buffer_size as f64)
     }
 
     /// 現在最も位相が進んでいるグレインのインデックスを取得
@@ -462,7 +576,7 @@ impl PitchShifter {
         let mut best_idx = None;
         let mut best_phase = -1.0;
 
-        for i in 0..NUM_GRAINS {
+        for i in 0..self.num_grains {
             if i == exclude_idx {
                 continue;
             }
@@ -476,7 +590,7 @@ impl PitchShifter {
 
         // 見つからなければ、除外以外で最大の位相を持つものを選択
         if best_idx.is_none() {
-            for i in 0..NUM_GRAINS {
+            for i in 0..self.num_grains {
                 if i == exclude_idx && self.grain_phase[i] > best_phase {
                     best_phase = self.grain_phase[i];
                     best_idx = Some(i);
@@ -489,23 +603,23 @@ impl PitchShifter {
 
     /// サンプルを処理
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        let grain_size_f = GRAIN_SIZE as f64;
+        let grain_size_f = self.grain_size as f64;
         let phase_increment = 1.0 / grain_size_f;
 
         for (i, out_sample) in output.iter_mut().enumerate() {
             // 入力をバッファに書き込み
             self.input_buffer[self.write_pos] = input[i];
-            self.write_pos = (self.write_pos + 1) % PITCH_BUFFER_SIZE;
+            self.write_pos = (self.write_pos + 1) % self.buffer_size;
 
             // 各グレインからの出力を合成
             let mut sum = 0.0f32;
 
-            for grain_idx in 0..NUM_GRAINS {
+            for grain_idx in 0..self.num_grains {
                 let phase = self.grain_phase[grain_idx];
 
                 // 窓関数の値を取得
                 let window_pos = (phase * grain_size_f) as usize;
-                let window_val = if window_pos < GRAIN_SIZE {
+                let window_val = if window_pos < self.grain_size {
                     self.window[window_pos]
                 } else {
                     0.0
@@ -517,8 +631,8 @@ impl PitchShifter {
 
                 // 読み取り位置を進める（ピッチ比率に応じて）
                 self.grain_read_pos[grain_idx] += self.pitch_ratio as f64;
-                if self.grain_read_pos[grain_idx] >= PITCH_BUFFER_SIZE as f64 {
-                    self.grain_read_pos[grain_idx] -= PITCH_BUFFER_SIZE as f64;
+                if self.grain_read_pos[grain_idx] >= self.buffer_size as f64 {
+                    self.grain_read_pos[grain_idx] -= self.buffer_size as f64;
                 }
 
                 // 位相を進める
@@ -529,9 +643,9 @@ impl PitchShifter {
                     self.grain_phase[grain_idx] -= 1.0;
 
                     // ベースとなる開始位置（書き込み位置の手前）
-                    let offset = (GRAIN_SIZE * NUM_GRAINS / 2) as f64;
+                    let offset = (self.grain_size * self.num_grains / 2) as f64;
                     let base_pos =
-                        (self.write_pos as f64 - offset).rem_euclid(PITCH_BUFFER_SIZE as f64);
+                        (self.write_pos as f64 - offset).rem_euclid(self.buffer_size as f64);
 
                     // 参照グレインを探して位相アラインメントを適用
                     let aligned_pos = if let Some(ref_idx) = self.find_reference_grain(grain_idx) {
@@ -546,7 +660,7 @@ impl PitchShifter {
             }
 
             // 正規化（グレイン数で割る）
-            *out_sample = sum / (NUM_GRAINS as f32 / 2.0);
+            *out_sample = sum / (self.num_grains as f32 / 2.0);
         }
 
         self.sample_count += input.len();
@@ -556,20 +670,19 @@ impl PitchShifter {
     #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.input_buffer.fill(0.0);
-        self.write_pos = PITCH_BUFFER_SIZE / 2;
+        self.write_pos = self.buffer_size / 2;
         self.sample_count = 0;
 
         // グレインを均等に再配置
         for (i, phase) in self.grain_phase.iter_mut().enumerate() {
-            *phase = i as f64 / NUM_GRAINS as f64;
+            *phase = i as f64 / self.num_grains as f64;
         }
 
         // グレインの読み取り位置を書き込み位置の手前に設定
-        let grain_spacing = GRAIN_SIZE / NUM_GRAINS;
+        let grain_spacing = self.grain_size / self.num_grains;
         for (i, read_pos) in self.grain_read_pos.iter_mut().enumerate() {
-            let offset = GRAIN_SIZE + (i * grain_spacing);
-            *read_pos =
-                (self.write_pos as f64 - offset as f64).rem_euclid(PITCH_BUFFER_SIZE as f64);
+            let offset = self.grain_size + (i * grain_spacing);
+            *read_pos = (self.write_pos as f64 - offset as f64).rem_euclid(self.buffer_size as f64);
         }
     }
 }

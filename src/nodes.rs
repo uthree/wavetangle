@@ -1162,6 +1162,10 @@ impl NodeBehavior for CompressorNode {
 pub struct PitchShiftNode {
     /// ピッチシフト量（半音単位、-12〜+12）
     pub semitones: f32,
+    /// グレインサイズ（サンプル数、128〜8192）
+    pub grain_size: usize,
+    /// グレイン数（2〜16）
+    pub num_grains: usize,
     /// 入力バッファ（1入力）
     pub input_buffers: Vec<ChannelBuffer>,
     /// 出力バッファ
@@ -1176,10 +1180,17 @@ impl Clone for PitchShiftNode {
     fn clone(&self) -> Self {
         Self {
             semitones: self.semitones,
+            grain_size: self.grain_size,
+            num_grains: self.num_grains,
             input_buffers: self.input_buffers.clone(),
             output_buffer: self.output_buffer.clone(),
             is_active: self.is_active,
-            pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::new(44100.0))),
+            pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::with_params(
+                44100.0,
+                self.grain_size,
+                self.num_grains,
+                crate::dsp::DEFAULT_PITCH_BUFFER_SIZE,
+            ))),
         }
     }
 }
@@ -1188,6 +1199,8 @@ impl PitchShiftNode {
     pub fn new() -> Self {
         Self {
             semitones: 0.0,
+            grain_size: crate::dsp::DEFAULT_GRAIN_SIZE,
+            num_grains: crate::dsp::DEFAULT_NUM_GRAINS,
             input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,

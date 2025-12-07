@@ -600,6 +600,43 @@ impl AudioGraphViewer {
             } else {
                 ui.label(format!("{:+} semitones", semitones_int));
             }
+
+            ui.separator();
+
+            // グレインサイズ（2のべき乗で調整）
+            ui.label("Grain Size:");
+            let mut grain_size_log = (node.grain_size as f32).log2();
+            if ui
+                .add(egui::Slider::new(&mut grain_size_log, 7.0..=13.0).show_value(false))
+                .changed()
+            {
+                let new_grain_size = 2_usize.pow(grain_size_log.round() as u32);
+                if new_grain_size != node.grain_size {
+                    node.grain_size = new_grain_size;
+                    if let Some(mut shifter) = node.pitch_shifter.try_lock() {
+                        shifter.set_grain_size(new_grain_size);
+                    }
+                }
+            }
+            ui.label(format!("{} samples", node.grain_size));
+
+            // グレイン数
+            ui.label("Num Grains:");
+            let mut num_grains = node.num_grains as i32;
+            if ui.add(egui::Slider::new(&mut num_grains, 2..=16)).changed() {
+                let new_num_grains = num_grains as usize;
+                if new_num_grains != node.num_grains {
+                    node.num_grains = new_num_grains;
+                    if let Some(mut shifter) = node.pitch_shifter.try_lock() {
+                        shifter.set_num_grains(new_num_grains);
+                    }
+                }
+            }
+
+            // 推定レイテンシ表示（サンプルレート48kHz想定）
+            let latency_samples = node.grain_size * node.num_grains / 2;
+            let latency_ms = latency_samples as f32 / 48.0;
+            ui.label(format!("Latency: ~{:.1} ms", latency_ms));
         });
     }
 

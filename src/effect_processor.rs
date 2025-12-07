@@ -147,8 +147,11 @@ impl EffectProcessor {
                     .min()
                     .unwrap_or(0);
 
-                // 処理するサンプル数を決定（利用可能な量を超えない）
-                let actual_block_size = block_size.min(min_available);
+                // 処理するサンプル数を決定
+                // バッファ蓄積を防ぐため、利用可能なデータをすべて処理する
+                // ただし、一度に処理する量に上限を設ける（処理時間の安定性のため）
+                let max_block_size = block_size * 8; // 最大8倍まで
+                let actual_block_size = min_available.min(max_block_size);
 
                 // データがある場合のみ処理
                 if actual_block_size > 0 {
@@ -162,10 +165,9 @@ impl EffectProcessor {
                         Self::process_node(node_info, actual_block_size, sr);
                     }
 
-                    // ステップ3: ソースバッファのデータを消費
-                    for buf in &all_source_buffers {
-                        buf.lock().consume(actual_block_size);
-                    }
+                    // ステップ3: ソースバッファのデータ消費は不要
+                    // copy_source_to_inputでread_and_consumeを使用しているため、
+                    // 読み取りと同時に消費される
                 }
 
                 // 次の処理まで待機
@@ -193,16 +195,16 @@ impl EffectProcessor {
     }
 
     /// ソースバッファからノードの入力バッファへデータをコピー
+    /// read_and_consumeでアトミックに読み取りと消費を行い、競合状態を防ぐ
     fn copy_source_to_input(node_info: &EffectNodeInfo, block_size: usize) {
         for (source, input) in node_info
             .source_buffers
             .iter()
             .zip(node_info.input_buffers.iter())
         {
-            // ソースバッファから読み取り（read - 状態を変更しない）
-            let temp = source.lock().read(block_size);
-
-            // 入力バッファに追加
+            // ソースバッファから読み取りと消費をアトミックに行う
+            // これにより、readとconsumeの間にpushが入る競合状態を防ぐ
+            let temp = source.lock().read_and_consume(block_size);
             input.lock().push(&temp);
         }
     }

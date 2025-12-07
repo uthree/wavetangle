@@ -51,6 +51,24 @@ impl AudioBuffer {
         result
     }
 
+    /// 先頭からn個のサンプルを読み取り、同時に消費する（アトミック操作）
+    /// バッファが足りない場合は0.0でパディング
+    /// readとconsumeの間に他のスレッドがpushすると競合が起きるため、
+    /// この関数で1回のロックで両方を行う
+    pub fn read_and_consume(&mut self, count: usize) -> Vec<f32> {
+        let mut result = Vec::with_capacity(count);
+        let available = self.data.len().min(count);
+
+        // 先頭からavailable個を取り出す（drainで同時に削除）
+        for sample in self.data.drain(0..available) {
+            result.push(sample);
+        }
+
+        // 不足分は0でパディング
+        result.resize(count, 0.0);
+        result
+    }
+
     /// 先頭からn個のサンプルを削除（消費済みとしてマーク）
     /// グラフプロセッサーが全てのコンシューマー処理後に呼ぶ
     pub fn consume(&mut self, count: usize) {
@@ -146,7 +164,8 @@ pub trait NodeBehavior {
 }
 
 /// デフォルトのリングバッファサイズ（サンプル数）
-pub const DEFAULT_RING_BUFFER_SIZE: usize = 8192;
+/// 4096 = 約85ms @ 48kHz（レイテンシと安定性のバランス）
+pub const DEFAULT_RING_BUFFER_SIZE: usize = 4096;
 
 // ============================================================================
 // Audio Input Node

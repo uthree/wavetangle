@@ -14,7 +14,7 @@ use egui_snarl::Snarl;
 
 use crate::audio::{AudioSystem, BUFFER_SIZES, SAMPLE_RATES};
 use crate::graph::AudioGraphProcessor;
-use crate::nodes::{AudioNode, NodeBehavior};
+use crate::nodes::AudioNode;
 use crate::project::ProjectFile;
 use crate::viewer::AudioGraphViewer;
 

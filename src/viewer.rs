@@ -2,7 +2,10 @@ use egui::{Color32, Ui};
 use egui_snarl::ui::{PinInfo, SnarlPin, SnarlViewer};
 use egui_snarl::{InPin, NodeId, OutPin, Snarl};
 
-use crate::nodes::{AudioNode, NodeBehavior, PinType};
+use crate::nodes::{
+    new_add, new_audio_input, new_audio_output, new_compressor, new_filter, new_gain,
+    new_graphic_eq, new_multiply, new_pitch_shift, new_spectrum_analyzer, AudioNode, PinType,
+};
 
 /// ピンタイプに応じた色を取得
 fn pin_color(pin_type: PinType) -> Color32 {
@@ -140,7 +143,7 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             } else {
                 for device_name in &self.input_devices.clone() {
                     if ui.button(device_name).clicked() {
-                        snarl.insert_node(pos, AudioNode::new_audio_input(device_name.clone()));
+                        snarl.insert_node(pos, new_audio_input(device_name.clone()));
                         ui.close();
                     }
                 }
@@ -153,7 +156,7 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             } else {
                 for device_name in &self.output_devices.clone() {
                     if ui.button(device_name).clicked() {
-                        snarl.insert_node(pos, AudioNode::new_audio_output(device_name.clone()));
+                        snarl.insert_node(pos, new_audio_output(device_name.clone()));
                         ui.close();
                     }
                 }
@@ -162,53 +165,41 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
 
         ui.menu_button("Effect", |ui| {
             if ui.button("Gain").clicked() {
-                snarl.insert_node(pos, AudioNode::Gain(crate::nodes::GainNode::new()));
+                snarl.insert_node(pos, new_gain());
                 ui.close();
             }
             if ui.button("Filter").clicked() {
-                snarl.insert_node(pos, AudioNode::Filter(crate::nodes::FilterNode::new()));
+                snarl.insert_node(pos, new_filter());
                 ui.close();
             }
             if ui.button("Compressor").clicked() {
-                snarl.insert_node(
-                    pos,
-                    AudioNode::Compressor(crate::nodes::CompressorNode::new()),
-                );
+                snarl.insert_node(pos, new_compressor());
                 ui.close();
             }
             if ui.button("Pitch Shift").clicked() {
-                snarl.insert_node(
-                    pos,
-                    AudioNode::PitchShift(crate::nodes::PitchShiftNode::new()),
-                );
+                snarl.insert_node(pos, new_pitch_shift());
                 ui.close();
             }
             if ui.button("Graphic EQ").clicked() {
-                snarl.insert_node(
-                    pos,
-                    AudioNode::GraphicEq(crate::nodes::GraphicEqNode::new()),
-                );
+                snarl.insert_node(pos, new_graphic_eq());
                 ui.close();
             }
         });
 
         ui.menu_button("Math", |ui| {
             if ui.button("Add").clicked() {
-                snarl.insert_node(pos, AudioNode::Add(crate::nodes::AddNode::new()));
+                snarl.insert_node(pos, new_add());
                 ui.close();
             }
             if ui.button("Multiply").clicked() {
-                snarl.insert_node(pos, AudioNode::Multiply(crate::nodes::MultiplyNode::new()));
+                snarl.insert_node(pos, new_multiply());
                 ui.close();
             }
         });
 
         ui.menu_button("Analysis", |ui| {
             if ui.button("Spectrum Analyzer").clicked() {
-                snarl.insert_node(
-                    pos,
-                    AudioNode::SpectrumAnalyzer(crate::nodes::SpectrumAnalyzerNode::new()),
-                );
+                snarl.insert_node(pos, new_spectrum_analyzer());
                 ui.close();
             }
         });

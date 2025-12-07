@@ -45,6 +45,8 @@ UI描画時に必要なコンテキストを保持する構造体：
 
 ### NodeBehavior trait (nodes.rs)
 すべてのノードが実装するトレイト。共通インターフェースを定義：
+- `node_type()`: ノードの型を返す（NodeType enum）
+- `as_any()`, `as_any_mut()`: ダウンキャスト用のAny参照を取得
 - `title()`: ノードのタイトル
 - `input_count()`, `output_count()`: ピン数（チャンネル数に連動）
 - `input_pin_type()`, `output_pin_type()`: ピンタイプ
@@ -55,25 +57,36 @@ UI描画時に必要なコンテキストを保持する構造体：
 - `is_active()`, `set_active()`: アクティブ状態
 - `show_body()`: ノードボディのUI描画（NodeUIContextを受け取る）
 
+### NodeType enum (nodes.rs)
+ノードの型を識別するためのenum：
+- `AudioInput`, `AudioOutput`, `Gain`, `Add`, `Multiply`, `Filter`
+- `SpectrumAnalyzer`, `Compressor`, `PitchShift`, `GraphicEq`
+
+ランタイムで型を判別し、`as_any()`と組み合わせて具体型にダウンキャストする際に使用。
+
 ### ヘルパー関数 (nodes.rs)
 コード重複を削減するための共通関数：
 - `channel_name()`: チャンネルインデックスからチャンネル名を取得（L, R, C, LFE, SL, SR）
 - `resize_channel_buffers()`: チャンネルバッファのサイズを調整
 
 ### AudioNode (nodes.rs)
-オーディオグラフのノードを表すenum。個別の構造体をラップ：
-- `AudioInput(AudioInputNode)`: オーディオ入力デバイスノード（出力ピン = チャンネル数、スペクトラム表示統合）
-- `AudioOutput(AudioOutputNode)`: オーディオ出力デバイスノード（入力ピン = チャンネル数、スペクトラム表示統合）
-- `Gain(GainNode)`: ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
-- `Add(AddNode)`: 加算ノード（2入力1出力、A + B）
-- `Multiply(MultiplyNode)`: 乗算ノード（2入力1出力、A × B、リングモジュレーション用）
-- `Filter(FilterNode)`: フィルターノード（1入力1出力、Low/High/Band Pass、カットオフ周波数、Q値）
-- `SpectrumAnalyzer(SpectrumAnalyzerNode)`: スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
-- `Compressor(CompressorNode)`: コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
-- `PitchShift(PitchShiftNode)`: ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
-- `GraphicEq(GraphicEqNode)`: グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
+`Box<dyn NodeBehavior>`の型エイリアス。動的ディスパッチによりノードを管理。
 
-`delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
+利用可能なノード型：
+- `AudioInputNode`: オーディオ入力デバイスノード（出力ピン = チャンネル数、スペクトラム表示統合）
+- `AudioOutputNode`: オーディオ出力デバイスノード（入力ピン = チャンネル数、スペクトラム表示統合）
+- `GainNode`: ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
+- `AddNode`: 加算ノード（2入力1出力、A + B）
+- `MultiplyNode`: 乗算ノード（2入力1出力、A × B、リングモジュレーション用）
+- `FilterNode`: フィルターノード（1入力1出力、Low/High/Band Pass、カットオフ周波数、Q値）
+- `SpectrumAnalyzerNode`: スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
+- `CompressorNode`: コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
+- `PitchShiftNode`: ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
+- `GraphicEqNode`: グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
+
+ファクトリ関数でノードを生成：
+- `new_audio_input()`, `new_audio_output()`, `new_gain()`, `new_add()`, `new_multiply()`
+- `new_filter()`, `new_spectrum_analyzer()`, `new_compressor()`, `new_pitch_shift()`, `new_graphic_eq()`
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。
@@ -121,10 +134,12 @@ egui-snarlのSnarlViewerトレイトを実装。
 
 新しいノードタイプを追加する際は：
 1. 構造体を定義（`channel_buffers: Vec<ChannelBuffer>`または`input_buffer`/`output_buffer`を含む）
-2. `NodeBehavior`トレイトを実装（`show_body()`でUI描画も含む）
-3. `AudioNode` enumにバリアントを追加
-4. マクロにバリアントを追加
+2. `NodeBehavior`トレイトを実装（`node_type()`, `as_any()`, `as_any_mut()`, `show_body()`など）
+3. `NodeType` enumにバリアントを追加
+4. ファクトリ関数を追加（`new_xxx() -> AudioNode`）
 5. `viewer.rs`の`show_graph_menu`を更新（ノード追加メニュー）
+6. `project.rs`のシリアライズ/デシリアライズを更新
+7. 必要に応じて`graph.rs`と`effect_processor.rs`を更新
 
 ## データフロー
 

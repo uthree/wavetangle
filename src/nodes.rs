@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -237,11 +238,35 @@ pub enum PinType {
     Audio,
 }
 
+/// ノードの種類を識別するenum
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NodeType {
+    AudioInput,
+    AudioOutput,
+    Gain,
+    Add,
+    Multiply,
+    Filter,
+    SpectrumAnalyzer,
+    Compressor,
+    PitchShift,
+    GraphicEq,
+}
+
 /// すべてのノードが実装するトレイト
 #[allow(dead_code)]
-pub trait NodeBehavior {
+pub trait NodeBehavior: Any {
+    /// ノードの種類を取得
+    fn node_type(&self) -> NodeType;
+
     /// ノードのタイトル
     fn title(&self) -> &str;
+
+    /// Anyとしての不変参照を取得（ダウンキャスト用）
+    fn as_any(&self) -> &dyn Any;
+
+    /// Anyとしての可変参照を取得（ダウンキャスト用）
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 
     /// 入力ピンの数
     fn input_count(&self) -> usize;
@@ -286,6 +311,19 @@ pub trait NodeBehavior {
 /// デフォルトのリングバッファサイズ（サンプル数）
 /// 4096 = 約85ms @ 48kHz（レイテンシと安定性のバランス）
 pub const DEFAULT_RING_BUFFER_SIZE: usize = 4096;
+
+/// as_any()とas_any_mut()の実装を生成するマクロ
+macro_rules! impl_as_any {
+    () => {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    };
+}
 
 /// マルチチャンネルオーディオのチャンネル名
 /// サラウンド5.1chまで対応
@@ -379,9 +417,15 @@ impl AudioInputNode {
 }
 
 impl NodeBehavior for AudioInputNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::AudioInput
+    }
+
     fn title(&self) -> &str {
         "Audio Input"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         0
@@ -527,9 +571,15 @@ impl AudioOutputNode {
 }
 
 impl NodeBehavior for AudioOutputNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::AudioOutput
+    }
+
     fn title(&self) -> &str {
         "Audio Output"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         self.channels as usize
@@ -652,9 +702,15 @@ impl Default for GainNode {
 }
 
 impl NodeBehavior for GainNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::Gain
+    }
+
     fn title(&self) -> &str {
         "Gain"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         1
@@ -773,9 +829,15 @@ impl Default for AddNode {
 }
 
 impl NodeBehavior for AddNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::Add
+    }
+
     fn title(&self) -> &str {
         "Add"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         2
@@ -883,9 +945,15 @@ impl Default for MultiplyNode {
 }
 
 impl NodeBehavior for MultiplyNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::Multiply
+    }
+
     fn title(&self) -> &str {
         "Multiply"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         2
@@ -1025,9 +1093,15 @@ impl Default for FilterNode {
 }
 
 impl NodeBehavior for FilterNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::Filter
+    }
+
     fn title(&self) -> &str {
         "Filter"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         1
@@ -1184,9 +1258,15 @@ impl Default for SpectrumAnalyzerNode {
 }
 
 impl NodeBehavior for SpectrumAnalyzerNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::SpectrumAnalyzer
+    }
+
     fn title(&self) -> &str {
         "Spectrum"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         1
@@ -1365,9 +1445,15 @@ impl Default for CompressorNode {
 }
 
 impl NodeBehavior for CompressorNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::Compressor
+    }
+
     fn title(&self) -> &str {
         "Compressor"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         1
@@ -1530,9 +1616,15 @@ impl Default for PitchShiftNode {
 }
 
 impl NodeBehavior for PitchShiftNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::PitchShift
+    }
+
     fn title(&self) -> &str {
         "Pitch Shift"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         1
@@ -1752,9 +1844,15 @@ impl Default for GraphicEqNode {
 }
 
 impl NodeBehavior for GraphicEqNode {
+    fn node_type(&self) -> NodeType {
+        NodeType::GraphicEq
+    }
+
     fn title(&self) -> &str {
         "Graphic EQ"
     }
+
+    impl_as_any!();
 
     fn input_count(&self) -> usize {
         1
@@ -2018,141 +2116,58 @@ impl NodeBehavior for GraphicEqNode {
 }
 
 // ============================================================================
-// AudioNode Enum - egui-snarlで使用するラッパー
+// AudioNode - Box<dyn NodeBehavior> 型エイリアス
 // ============================================================================
 
-/// オーディオグラフのノード（enumラッパー）
-#[derive(Clone)]
-pub enum AudioNode {
-    AudioInput(AudioInputNode),
-    AudioOutput(AudioOutputNode),
-    Gain(GainNode),
-    Add(AddNode),
-    Multiply(MultiplyNode),
-    Filter(FilterNode),
-    SpectrumAnalyzer(SpectrumAnalyzerNode),
-    Compressor(CompressorNode),
-    PitchShift(PitchShiftNode),
-    GraphicEq(GraphicEqNode),
+/// オーディオグラフのノード（トレイトオブジェクト）
+pub type AudioNode = Box<dyn NodeBehavior>;
+
+/// AudioInputノードを作成
+pub fn new_audio_input(device_name: String) -> AudioNode {
+    Box::new(AudioInputNode::new(device_name))
 }
 
-/// enumバリアントに対してtraitメソッドをデリゲートするマクロ
-macro_rules! delegate_node_behavior {
-    ($self:expr, $method:ident $(, $arg:expr)*) => {
-        match $self {
-            AudioNode::AudioInput(node) => node.$method($($arg),*),
-            AudioNode::AudioOutput(node) => node.$method($($arg),*),
-            AudioNode::Gain(node) => node.$method($($arg),*),
-            AudioNode::Add(node) => node.$method($($arg),*),
-            AudioNode::Multiply(node) => node.$method($($arg),*),
-            AudioNode::Filter(node) => node.$method($($arg),*),
-            AudioNode::SpectrumAnalyzer(node) => node.$method($($arg),*),
-            AudioNode::Compressor(node) => node.$method($($arg),*),
-            AudioNode::PitchShift(node) => node.$method($($arg),*),
-            AudioNode::GraphicEq(node) => node.$method($($arg),*),
-        }
-    };
+/// AudioOutputノードを作成
+pub fn new_audio_output(device_name: String) -> AudioNode {
+    Box::new(AudioOutputNode::new(device_name))
 }
 
-impl NodeBehavior for AudioNode {
-    fn title(&self) -> &str {
-        delegate_node_behavior!(self, title)
-    }
-
-    fn input_count(&self) -> usize {
-        delegate_node_behavior!(self, input_count)
-    }
-
-    fn output_count(&self) -> usize {
-        delegate_node_behavior!(self, output_count)
-    }
-
-    fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        delegate_node_behavior!(self, input_pin_type, index)
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        delegate_node_behavior!(self, output_pin_type, index)
-    }
-
-    fn input_pin_name(&self, index: usize) -> Option<&str> {
-        delegate_node_behavior!(self, input_pin_name, index)
-    }
-
-    fn output_pin_name(&self, index: usize) -> Option<&str> {
-        delegate_node_behavior!(self, output_pin_name, index)
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        delegate_node_behavior!(self, input_buffer, index)
-    }
-
-    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        delegate_node_behavior!(self, channel_buffer, channel)
-    }
-
-    fn channels(&self) -> u16 {
-        delegate_node_behavior!(self, channels)
-    }
-
-    fn set_channels(&mut self, channels: u16) {
-        match self {
-            AudioNode::AudioInput(node) => node.set_channels(channels),
-            AudioNode::AudioOutput(node) => node.set_channels(channels),
-            AudioNode::Gain(node) => node.set_channels(channels),
-            AudioNode::Add(node) => node.set_channels(channels),
-            AudioNode::Multiply(node) => node.set_channels(channels),
-            AudioNode::Filter(node) => node.set_channels(channels),
-            AudioNode::SpectrumAnalyzer(node) => node.set_channels(channels),
-            AudioNode::Compressor(node) => node.set_channels(channels),
-            AudioNode::PitchShift(node) => node.set_channels(channels),
-            AudioNode::GraphicEq(node) => node.set_channels(channels),
-        }
-    }
-
-    fn is_active(&self) -> bool {
-        delegate_node_behavior!(self, is_active)
-    }
-
-    fn set_active(&mut self, active: bool) {
-        match self {
-            AudioNode::AudioInput(node) => node.set_active(active),
-            AudioNode::AudioOutput(node) => node.set_active(active),
-            AudioNode::Gain(node) => node.set_active(active),
-            AudioNode::Add(node) => node.set_active(active),
-            AudioNode::Multiply(node) => node.set_active(active),
-            AudioNode::Filter(node) => node.set_active(active),
-            AudioNode::SpectrumAnalyzer(node) => node.set_active(active),
-            AudioNode::Compressor(node) => node.set_active(active),
-            AudioNode::PitchShift(node) => node.set_active(active),
-            AudioNode::GraphicEq(node) => node.set_active(active),
-        }
-    }
-
-    fn show_body(&mut self, ui: &mut Ui, ctx: &NodeUIContext) {
-        match self {
-            AudioNode::AudioInput(node) => node.show_body(ui, ctx),
-            AudioNode::AudioOutput(node) => node.show_body(ui, ctx),
-            AudioNode::Gain(node) => node.show_body(ui, ctx),
-            AudioNode::Add(node) => node.show_body(ui, ctx),
-            AudioNode::Multiply(node) => node.show_body(ui, ctx),
-            AudioNode::Filter(node) => node.show_body(ui, ctx),
-            AudioNode::SpectrumAnalyzer(node) => node.show_body(ui, ctx),
-            AudioNode::Compressor(node) => node.show_body(ui, ctx),
-            AudioNode::PitchShift(node) => node.show_body(ui, ctx),
-            AudioNode::GraphicEq(node) => node.show_body(ui, ctx),
-        }
-    }
+/// Gainノードを作成
+pub fn new_gain() -> AudioNode {
+    Box::new(GainNode::new())
 }
 
-impl AudioNode {
-    /// AudioInputノードを作成
-    pub fn new_audio_input(device_name: String) -> Self {
-        Self::AudioInput(AudioInputNode::new(device_name))
-    }
+/// Addノードを作成
+pub fn new_add() -> AudioNode {
+    Box::new(AddNode::new())
+}
 
-    /// AudioOutputノードを作成
-    pub fn new_audio_output(device_name: String) -> Self {
-        Self::AudioOutput(AudioOutputNode::new(device_name))
-    }
+/// Multiplyノードを作成
+pub fn new_multiply() -> AudioNode {
+    Box::new(MultiplyNode::new())
+}
+
+/// Filterノードを作成
+pub fn new_filter() -> AudioNode {
+    Box::new(FilterNode::new())
+}
+
+/// SpectrumAnalyzerノードを作成
+pub fn new_spectrum_analyzer() -> AudioNode {
+    Box::new(SpectrumAnalyzerNode::new())
+}
+
+/// Compressorノードを作成
+pub fn new_compressor() -> AudioNode {
+    Box::new(CompressorNode::new())
+}
+
+/// PitchShiftノードを作成
+pub fn new_pitch_shift() -> AudioNode {
+    Box::new(PitchShiftNode::new())
+}
+
+/// GraphicEqノードを作成
+pub fn new_graphic_eq() -> AudioNode {
+    Box::new(GraphicEqNode::new())
 }

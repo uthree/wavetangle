@@ -4,7 +4,10 @@ use egui_snarl::{InPinId, NodeId, Snarl};
 
 use crate::audio::{AudioSystem, OutputStreamId};
 use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
-use crate::nodes::{AudioNode, ChannelBuffer, NodeBehavior};
+use crate::nodes::{
+    AudioInputNode, AudioNode, AudioOutputNode, ChannelBuffer, CompressorNode, FilterNode,
+    GainNode, GraphicEqNode, NodeBehavior, NodeType, PitchShiftNode, SpectrumAnalyzerNode,
+};
 
 /// アクティブノードの状態
 enum ActiveNodeState {
@@ -65,48 +68,54 @@ impl AudioGraphProcessor {
         use crate::nodes::FFT_SIZE;
 
         for (_node_id, node) in snarl.nodes_ids_mut() {
-            match node {
-                AudioNode::AudioInput(input_node) => {
-                    if input_node.is_active {
-                        // 最初のチャンネルからデータを取得してスペクトラム解析（常に更新）
-                        // read()は状態を変更しないので、データを消費せずに読み取れる
-                        if let Some(buffer) = input_node.channel_buffers.first() {
-                            let samples = buffer.lock().read(FFT_SIZE);
+            match node.node_type() {
+                NodeType::AudioInput => {
+                    if let Some(input_node) = node.as_any_mut().downcast_mut::<AudioInputNode>() {
+                        if input_node.is_active {
+                            // 最初のチャンネルからデータを取得してスペクトラム解析（常に更新）
+                            // read()は状態を変更しないので、データを消費せずに読み取れる
+                            if let Some(buffer) = input_node.channel_buffers.first() {
+                                let samples = buffer.lock().read(FFT_SIZE);
 
-                            let mut analyzer = input_node.analyzer.lock();
-                            analyzer.push_samples(&samples);
-                            let spectrum_data = analyzer.compute_spectrum();
+                                let mut analyzer = input_node.analyzer.lock();
+                                analyzer.push_samples(&samples);
+                                let spectrum_data = analyzer.compute_spectrum();
 
-                            let mut spectrum = input_node.spectrum.lock();
-                            spectrum.copy_from_slice(&spectrum_data);
+                                let mut spectrum = input_node.spectrum.lock();
+                                spectrum.copy_from_slice(&spectrum_data);
+                            }
                         }
                     }
                 }
-                AudioNode::AudioOutput(output_node) => {
-                    if output_node.is_active {
-                        // 出力ノード自身のバッファからスペクトラム解析
-                        // read()は状態を変更しないので、データを消費せずに読み取れる
-                        if let Some(buffer) = output_node.channel_buffers.first() {
-                            let samples = buffer.lock().read(FFT_SIZE);
+                NodeType::AudioOutput => {
+                    if let Some(output_node) = node.as_any_mut().downcast_mut::<AudioOutputNode>() {
+                        if output_node.is_active {
+                            // 出力ノード自身のバッファからスペクトラム解析
+                            // read()は状態を変更しないので、データを消費せずに読み取れる
+                            if let Some(buffer) = output_node.channel_buffers.first() {
+                                let samples = buffer.lock().read(FFT_SIZE);
 
-                            let mut analyzer = output_node.analyzer.lock();
-                            analyzer.push_samples(&samples);
-                            let spectrum_data = analyzer.compute_spectrum();
+                                let mut analyzer = output_node.analyzer.lock();
+                                analyzer.push_samples(&samples);
+                                let spectrum_data = analyzer.compute_spectrum();
 
-                            let mut spectrum = output_node.spectrum.lock();
-                            spectrum.copy_from_slice(&spectrum_data);
+                                let mut spectrum = output_node.spectrum.lock();
+                                spectrum.copy_from_slice(&spectrum_data);
+                            }
                         }
                     }
                 }
-                AudioNode::GraphicEq(eq_node) => {
-                    if eq_node.show_spectrum {
-                        // 入力バッファからスペクトラムを取得
-                        // GraphicEqは内部でFFTを使用しているので、そのスペクトラムを再利用
-                        let eq = eq_node.graphic_eq.lock();
-                        let spectrum_data = eq.get_input_spectrum();
-                        let mut spectrum = eq_node.spectrum.lock();
-                        if spectrum.len() == spectrum_data.len() {
-                            spectrum.copy_from_slice(spectrum_data);
+                NodeType::GraphicEq => {
+                    if let Some(eq_node) = node.as_any_mut().downcast_mut::<GraphicEqNode>() {
+                        if eq_node.show_spectrum {
+                            // 入力バッファからスペクトラムを取得
+                            // GraphicEqは内部でFFTを使用しているので、そのスペクトラムを再利用
+                            let eq = eq_node.graphic_eq.lock();
+                            let spectrum_data = eq.get_input_spectrum();
+                            let mut spectrum = eq_node.spectrum.lock();
+                            if spectrum.len() == spectrum_data.len() {
+                                spectrum.copy_from_slice(spectrum_data);
+                            }
                         }
                     }
                 }
@@ -141,20 +150,23 @@ impl AudioGraphProcessor {
             }
 
             // 出力ノードへのデータコピー処理を追加
-            if let AudioNode::AudioOutput(output_node) = node {
-                if output_node.is_active {
-                    // 各チャンネルに対してPassThroughエフェクトを作成
-                    for ch in 0..output_node.channels as usize {
-                        if let Some(source_buffer) = Self::get_source_buffer(snarl, node_id, ch) {
-                            // 出力ノードの入力バッファを使用
-                            if let Some(input_buffer) = output_node.input_buffer(ch) {
-                                if let Some(output_buffer) = output_node.channel_buffer(ch) {
-                                    effect_nodes.push(EffectNodeInfo {
-                                        node_type: EffectNodeType::PassThrough,
-                                        source_buffers: vec![source_buffer],
-                                        input_buffers: vec![input_buffer],
-                                        output_buffer,
-                                    });
+            if node.node_type() == NodeType::AudioOutput {
+                if let Some(output_node) = node.as_any().downcast_ref::<AudioOutputNode>() {
+                    if output_node.is_active {
+                        // 各チャンネルに対してPassThroughエフェクトを作成
+                        for ch in 0..output_node.channels as usize {
+                            if let Some(source_buffer) = Self::get_source_buffer(snarl, node_id, ch)
+                            {
+                                // 出力ノードの入力バッファを使用
+                                if let Some(input_buffer) = output_node.input_buffer(ch) {
+                                    if let Some(output_buffer) = output_node.channel_buffer(ch) {
+                                        effect_nodes.push(EffectNodeInfo {
+                                            node_type: EffectNodeType::PassThrough,
+                                            source_buffers: vec![source_buffer],
+                                            input_buffers: vec![input_buffer],
+                                            output_buffer,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -234,60 +246,78 @@ impl AudioGraphProcessor {
         node_id: NodeId,
         node: &AudioNode,
     ) -> Option<EffectNodeInfo> {
-        let (node_type, input_count) = match node {
-            AudioNode::Gain(gain_node) => (
-                EffectNodeType::Gain {
-                    gain: gain_node.gain,
-                },
-                1,
-            ),
-            AudioNode::Add(_) => (EffectNodeType::Add, 2),
-            AudioNode::Multiply(_) => (EffectNodeType::Multiply, 2),
-            AudioNode::Filter(filter_node) => (
-                EffectNodeType::Filter {
-                    filter_type: filter_node.filter_type,
-                    cutoff: filter_node.cutoff,
-                    resonance: filter_node.resonance,
-                    state: filter_node.biquad_state.clone(),
-                },
-                1,
-            ),
-            AudioNode::SpectrumAnalyzer(spectrum_node) => (
-                EffectNodeType::SpectrumAnalyzer {
-                    analyzer: spectrum_node.analyzer.clone(),
-                    spectrum: spectrum_node.spectrum.clone(),
-                },
-                1,
-            ),
-            AudioNode::Compressor(comp_node) => (
-                EffectNodeType::Compressor {
-                    threshold: comp_node.threshold,
-                    ratio: comp_node.ratio,
-                    attack: comp_node.attack,
-                    release: comp_node.release,
-                    makeup_gain: comp_node.makeup_gain,
-                    state: comp_node.compressor_state.clone(),
-                },
-                1,
-            ),
-            AudioNode::PitchShift(pitch_node) => (
-                EffectNodeType::PitchShift {
-                    semitones: pitch_node.semitones,
-                    phase_alignment_enabled: pitch_node.phase_alignment_enabled,
-                    search_range_ratio: pitch_node.search_range_ratio,
-                    correlation_length_ratio: pitch_node.correlation_length_ratio,
-                    pitch_shifter: pitch_node.pitch_shifter.clone(),
-                },
-                1,
-            ),
-            AudioNode::GraphicEq(eq_node) => (
-                EffectNodeType::GraphicEq {
-                    graphic_eq: eq_node.graphic_eq.clone(),
-                },
-                1,
-            ),
+        let (node_type, input_count) = match node.node_type() {
+            NodeType::Gain => {
+                let gain_node = node.as_any().downcast_ref::<GainNode>()?;
+                (
+                    EffectNodeType::Gain {
+                        gain: gain_node.gain,
+                    },
+                    1,
+                )
+            }
+            NodeType::Add => (EffectNodeType::Add, 2),
+            NodeType::Multiply => (EffectNodeType::Multiply, 2),
+            NodeType::Filter => {
+                let filter_node = node.as_any().downcast_ref::<FilterNode>()?;
+                (
+                    EffectNodeType::Filter {
+                        filter_type: filter_node.filter_type,
+                        cutoff: filter_node.cutoff,
+                        resonance: filter_node.resonance,
+                        state: filter_node.biquad_state.clone(),
+                    },
+                    1,
+                )
+            }
+            NodeType::SpectrumAnalyzer => {
+                let spectrum_node = node.as_any().downcast_ref::<SpectrumAnalyzerNode>()?;
+                (
+                    EffectNodeType::SpectrumAnalyzer {
+                        analyzer: spectrum_node.analyzer.clone(),
+                        spectrum: spectrum_node.spectrum.clone(),
+                    },
+                    1,
+                )
+            }
+            NodeType::Compressor => {
+                let comp_node = node.as_any().downcast_ref::<CompressorNode>()?;
+                (
+                    EffectNodeType::Compressor {
+                        threshold: comp_node.threshold,
+                        ratio: comp_node.ratio,
+                        attack: comp_node.attack,
+                        release: comp_node.release,
+                        makeup_gain: comp_node.makeup_gain,
+                        state: comp_node.compressor_state.clone(),
+                    },
+                    1,
+                )
+            }
+            NodeType::PitchShift => {
+                let pitch_node = node.as_any().downcast_ref::<PitchShiftNode>()?;
+                (
+                    EffectNodeType::PitchShift {
+                        semitones: pitch_node.semitones,
+                        phase_alignment_enabled: pitch_node.phase_alignment_enabled,
+                        search_range_ratio: pitch_node.search_range_ratio,
+                        correlation_length_ratio: pitch_node.correlation_length_ratio,
+                        pitch_shifter: pitch_node.pitch_shifter.clone(),
+                    },
+                    1,
+                )
+            }
+            NodeType::GraphicEq => {
+                let eq_node = node.as_any().downcast_ref::<GraphicEqNode>()?;
+                (
+                    EffectNodeType::GraphicEq {
+                        graphic_eq: eq_node.graphic_eq.clone(),
+                    },
+                    1,
+                )
+            }
             // 入出力ノードはエフェクトノードではない
-            AudioNode::AudioInput(_) | AudioNode::AudioOutput(_) => return None,
+            NodeType::AudioInput | NodeType::AudioOutput => return None,
         };
 
         // ソースバッファを収集（接続されたノードの出力バッファ）
@@ -334,43 +364,51 @@ impl AudioGraphProcessor {
         let mut to_stop_output: Vec<(NodeId, OutputStreamId)> = Vec::new();
 
         for (node_id, node) in snarl.node_ids() {
-            match node {
-                AudioNode::AudioInput(input_node) => {
-                    if input_node.is_active && !self.active_nodes.contains_key(&node_id) {
-                        to_start_input.push((
-                            node_id,
-                            input_node.device_name.clone(),
-                            input_node.channel_buffers.clone(),
-                        ));
-                    } else if !input_node.is_active && self.active_nodes.contains_key(&node_id) {
-                        to_stop_input.push(node_id);
-                    }
-                }
-                AudioNode::AudioOutput(output_node) => {
-                    if output_node.is_active && !self.active_nodes.contains_key(&node_id) {
-                        // 出力ノードは常に自身のバッファを使用
-                        // データはeffect_processorによってソースからコピーされる
-                        let buffers = output_node.channel_buffers.clone();
-                        to_start_output.push((node_id, output_node.device_name.clone(), buffers));
-                    } else if !output_node.is_active {
-                        if let Some(ActiveNodeState::Output { stream_id }) =
-                            self.active_nodes.get(&node_id)
+            match node.node_type() {
+                NodeType::AudioInput => {
+                    if let Some(input_node) = node.as_any().downcast_ref::<AudioInputNode>() {
+                        if input_node.is_active && !self.active_nodes.contains_key(&node_id) {
+                            to_start_input.push((
+                                node_id,
+                                input_node.device_name.clone(),
+                                input_node.channel_buffers.clone(),
+                            ));
+                        } else if !input_node.is_active && self.active_nodes.contains_key(&node_id)
                         {
-                            to_stop_output.push((node_id, *stream_id));
+                            to_stop_input.push(node_id);
                         }
                     }
-                    // 接続変更はeffect_processorで自動的に処理されるため、再起動不要
                 }
-                AudioNode::Gain(_)
-                | AudioNode::Add(_)
-                | AudioNode::Multiply(_)
-                | AudioNode::Filter(_)
-                | AudioNode::SpectrumAnalyzer(_)
-                | AudioNode::Compressor(_)
-                | AudioNode::PitchShift(_)
-                | AudioNode::GraphicEq(_) => {
-                    // エフェクトノードはEffectProcessorで処理される
+                NodeType::AudioOutput => {
+                    if let Some(output_node) = node.as_any().downcast_ref::<AudioOutputNode>() {
+                        if output_node.is_active && !self.active_nodes.contains_key(&node_id) {
+                            // 出力ノードは常に自身のバッファを使用
+                            // データはeffect_processorによってソースからコピーされる
+                            let buffers = output_node.channel_buffers.clone();
+                            to_start_output.push((
+                                node_id,
+                                output_node.device_name.clone(),
+                                buffers,
+                            ));
+                        } else if !output_node.is_active {
+                            if let Some(ActiveNodeState::Output { stream_id }) =
+                                self.active_nodes.get(&node_id)
+                            {
+                                to_stop_output.push((node_id, *stream_id));
+                            }
+                        }
+                        // 接続変更はeffect_processorで自動的に処理されるため、再起動不要
+                    }
                 }
+                // エフェクトノードはEffectProcessorで処理される
+                NodeType::Gain
+                | NodeType::Add
+                | NodeType::Multiply
+                | NodeType::Filter
+                | NodeType::SpectrumAnalyzer
+                | NodeType::Compressor
+                | NodeType::PitchShift
+                | NodeType::GraphicEq => {}
             }
         }
 

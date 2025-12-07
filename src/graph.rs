@@ -39,6 +39,12 @@ impl AudioGraphProcessor {
         !self.active_nodes.is_empty()
     }
 
+    /// すべてのストリームを停止
+    pub fn stop_all_streams(&mut self) {
+        self.active_nodes.clear();
+        self.effect_processor.clear_nodes();
+    }
+
     /// グラフの接続を処理し、オーディオをルーティング
     pub fn process(&mut self, snarl: &mut Snarl<AudioNode>, audio_system: &mut AudioSystem) {
         // サンプルレートを更新

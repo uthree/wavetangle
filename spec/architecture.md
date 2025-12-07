@@ -16,6 +16,7 @@ src/
 ├── effect_processor.rs  # エフェクト処理専用スレッド
 ├── graph.rs             # オーディオグラフの処理ロジック
 ├── pipeline.rs          # パイプライン並列処理（ロックフリーSPSCバッファ）
+├── project.rs           # プロジェクトの保存・読み込み
 └── viewer.rs            # egui-snarlのSnarlViewer実装
 ```
 
@@ -153,20 +154,37 @@ egui-snarlのSnarlViewerトレイトを実装。
   - 対数周波数スケールで線形補間
   - egui_plotによるカーブエディタUI（ドラッグでポイント移動可能）
 
+## プロジェクトファイル (project.rs)
+
+グラフの保存・読み込み機能を提供。JSON形式でシリアライズ。
+
+### ProjectFile
+- `nodes`: 各ノードのパラメータ（デバイス名、ゲイン値、フィルター設定など）
+- `positions`: ノードの位置情報
+- `connections`: ノード間の接続情報
+- ファイル拡張子: `.wtg`
+
+### 対応メニュー
+- File > New: 新規プロジェクト
+- File > Open...: プロジェクトを開く（rfdファイルダイアログ使用）
+- File > Save: 上書き保存
+- File > Save As...: 名前をつけて保存
+
 ## 依存ライブラリ
 
 - **eframe/egui**: GUIフレームワーク
-- **egui-snarl**: ノードグラフエディタ
+- **egui-snarl**: ノードグラフエディタ（serde機能有効）
 - **egui_plot**: プロット表示（スペクトラムアナライザー用）
 - **cpal**: クロスプラットフォームオーディオI/O
 - **parking_lot**: 高性能mutex実装
 - **ringbuf**: ロックフリーSPSCリングバッファ（パイプライン並列処理用）
 - **ndarray**: 将来的な信号処理用（現在未使用）
 - **rustfft**: FFT実装（スペクトラムアナライザー用）
+- **serde/serde_json**: シリアライズ・デシリアライズ
+- **rfd**: ネイティブファイルダイアログ
 
 ## 今後の拡張予定
 
 - ファイル入出力ノード
 - シグナルジェネレータノード（オシレーター）
 - ディレイ・リバーブノード
-- グラフの保存・読み込み

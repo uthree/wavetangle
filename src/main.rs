@@ -4,7 +4,10 @@ mod effect_processor;
 mod graph;
 mod nodes;
 mod pipeline;
+mod project;
 mod viewer;
+
+use std::path::PathBuf;
 
 use eframe::egui;
 use egui_snarl::ui::SnarlStyle;
@@ -13,6 +16,7 @@ use egui_snarl::Snarl;
 use crate::audio::{AudioSystem, BUFFER_SIZES, SAMPLE_RATES};
 use crate::graph::AudioGraphProcessor;
 use crate::nodes::{AudioNode, NodeBehavior};
+use crate::project::ProjectFile;
 use crate::viewer::AudioGraphViewer;
 
 /// アプリケーションのメイン状態
@@ -26,6 +30,10 @@ struct WavetangleApp {
     output_devices: Vec<String>,
     /// Audio Settings ウィンドウの表示状態
     show_audio_settings: bool,
+    /// 現在開いているファイルのパス
+    current_file_path: Option<PathBuf>,
+    /// ステータスメッセージ
+    status_message: Option<(String, std::time::Instant)>,
 }
 
 impl WavetangleApp {
@@ -78,6 +86,71 @@ impl WavetangleApp {
             input_devices,
             output_devices,
             show_audio_settings: false,
+            current_file_path: None,
+            status_message: None,
+        }
+    }
+
+    /// ステータスメッセージを設定
+    fn set_status(&mut self, message: &str) {
+        self.status_message = Some((message.to_string(), std::time::Instant::now()));
+    }
+
+    /// プロジェクトを開く
+    fn open_project(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Wavetangle Project", &["wtg", "json"])
+            .pick_file()
+        {
+            match ProjectFile::load_from_file(&path) {
+                Ok(project) => {
+                    // すべてのストリームを停止
+                    self.deactivate_all();
+                    self.graph_processor.stop_all_streams();
+
+                    // グラフを読み込み
+                    self.snarl = project.to_snarl();
+                    self.current_file_path = Some(path.clone());
+                    self.set_status(&format!("Opened: {}", path.display()));
+                }
+                Err(e) => {
+                    self.set_status(&format!("Error opening file: {}", e));
+                }
+            }
+        }
+    }
+
+    /// プロジェクトを保存（上書き）
+    fn save_project(&mut self) {
+        if let Some(path) = &self.current_file_path.clone() {
+            self.save_project_to(path.clone());
+        } else {
+            self.save_project_as();
+        }
+    }
+
+    /// 名前をつけて保存
+    fn save_project_as(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Wavetangle Project", &["wtg"])
+            .set_file_name("untitled.wtg")
+            .save_file()
+        {
+            self.save_project_to(path);
+        }
+    }
+
+    /// 指定されたパスに保存
+    fn save_project_to(&mut self, path: PathBuf) {
+        let project = ProjectFile::from_snarl(&self.snarl);
+        match project.save_to_file(&path) {
+            Ok(()) => {
+                self.current_file_path = Some(path.clone());
+                self.set_status(&format!("Saved: {}", path.display()));
+            }
+            Err(e) => {
+                self.set_status(&format!("Error saving file: {}", e));
+            }
         }
     }
 
@@ -112,8 +185,25 @@ impl eframe::App for WavetangleApp {
             #[allow(deprecated)]
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Clear Graph").clicked() {
+                    if ui.button("New").clicked() {
+                        self.deactivate_all();
+                        self.graph_processor.stop_all_streams();
                         self.snarl = Snarl::new();
+                        self.current_file_path = None;
+                        self.set_status("New project created");
+                        ui.close();
+                    }
+                    if ui.button("Open...").clicked() {
+                        self.open_project();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Save").clicked() {
+                        self.save_project();
+                        ui.close();
+                    }
+                    if ui.button("Save As...").clicked() {
+                        self.save_project_as();
                         ui.close();
                     }
                     ui.separator();
@@ -236,6 +326,33 @@ impl eframe::App for WavetangleApp {
                 self.audio_system.set_config(config);
             }
         }
+
+        // ステータスバー
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                // ファイル名表示
+                if let Some(path) = &self.current_file_path {
+                    let file_name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    ui.label(format!("File: {}", file_name));
+                } else {
+                    ui.label("File: (Untitled)");
+                }
+
+                ui.separator();
+
+                // ステータスメッセージ（3秒間表示）
+                if let Some((msg, time)) = &self.status_message {
+                    if time.elapsed().as_secs() < 3 {
+                        ui.label(msg);
+                    } else {
+                        self.status_message = None;
+                    }
+                }
+            });
+        });
 
         // メインパネル - ノードグラフ
         egui::CentralPanel::default().show(ctx, |ui| {

@@ -10,7 +10,12 @@ Wavetangleは、egui-snarlを使用したノードベースのオーディオグ
 ```
 src/
 ├── main.rs              # アプリケーションエントリーポイント、eframeアプリ実装
-├── nodes.rs             # オーディオノードの定義
+├── nodes/               # オーディオノードの定義
+│   ├── mod.rs           # 共通型、トレイト、ファクトリ関数、テスト
+│   ├── io.rs            # AudioInputNode, AudioOutputNode
+│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, PitchShiftNode, GraphicEqNode
+│   ├── math.rs          # AddNode, MultiplyNode
+│   └── analyzer.rs      # SpectrumAnalyzerNode
 ├── audio.rs             # cpalを使用したオーディオシステム
 ├── dsp.rs               # DSPアルゴリズム（フィルター、コンプレッサー、FFT）
 ├── effect_processor.rs  # エフェクト処理専用スレッド
@@ -21,29 +26,27 @@ src/
 
 ## 主要コンポーネント
 
-### AudioBuffer (nodes.rs)
+### AudioBuffer (nodes/mod.rs)
 音声データの転送用FIFOバッファ（VecDequeベース）。
 - `push()`: データを末尾に追加（容量超過時は先頭を削除）
 - `read()`: データのコピーを取得（状態変更なし - 複数コンシューマー対応）
-- `read_and_consume()`: 読み取りと消費をアトミックに実行（競合状態防止）
 - `consume()`: 先頭からデータを削除
 - `len()`: 利用可能なサンプル数
 
 設計原則:
 - `read()`は状態を変更しない（複数コンシューマー対応）
-- プロデューサー/コンシューマー間の競合を防ぐため、エフェクト処理では
-  `read_and_consume()`を使用してアトミックに操作する
+- 分岐処理ではスナップショット方式を採用し、全コンシューマーが読み取り後に一度だけ`consume()`を実行
 
-### ChannelBuffer (nodes.rs)
+### ChannelBuffer (nodes/mod.rs)
 `Arc<Mutex<AudioBuffer>>` - チャンネルごとの共有バッファ。
 
-### NodeUIContext (nodes.rs)
+### NodeUIContext (nodes/mod.rs)
 UI描画時に必要なコンテキストを保持する構造体：
 - `input_devices`: 入力デバイス名のリスト
 - `output_devices`: 出力デバイス名のリスト
 - `node_id`: ウィジェットの一意識別用ノードID
 
-### NodeBehavior trait (nodes.rs)
+### NodeBehavior trait (nodes/mod.rs)
 すべてのノードが実装するトレイト。共通インターフェースを定義：
 - `node_type()`: ノードの型を返す（NodeType enum）
 - `as_any()`, `as_any_mut()`: ダウンキャスト用のAny参照を取得
@@ -57,36 +60,37 @@ UI描画時に必要なコンテキストを保持する構造体：
 - `is_active()`, `set_active()`: アクティブ状態
 - `show_body()`: ノードボディのUI描画（NodeUIContextを受け取る）
 
-### NodeType enum (nodes.rs)
+### NodeType enum (nodes/mod.rs)
 ノードの型を識別するためのenum：
 - `AudioInput`, `AudioOutput`, `Gain`, `Add`, `Multiply`, `Filter`
 - `SpectrumAnalyzer`, `Compressor`, `PitchShift`, `GraphicEq`
 
 ランタイムで型を判別し、`as_any()`と組み合わせて具体型にダウンキャストする際に使用。
 
-### ヘルパー関数 (nodes.rs)
+### ヘルパー関数 (nodes/mod.rs)
 コード重複を削減するための共通関数：
 - `channel_name()`: チャンネルインデックスからチャンネル名を取得（L, R, C, LFE, SL, SR）
 - `resize_channel_buffers()`: チャンネルバッファのサイズを調整
 
-### AudioNode (nodes.rs)
+### AudioNode (nodes/mod.rs)
 `Box<dyn NodeBehavior>`の型エイリアス。動的ディスパッチによりノードを管理。
 
-利用可能なノード型：
-- `AudioInputNode`: オーディオ入力デバイスノード（出力ピン = チャンネル数、スペクトラム表示統合）
-- `AudioOutputNode`: オーディオ出力デバイスノード（入力ピン = チャンネル数、スペクトラム表示統合）
-- `GainNode`: ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
-- `AddNode`: 加算ノード（2入力1出力、A + B）
-- `MultiplyNode`: 乗算ノード（2入力1出力、A × B、リングモジュレーション用）
-- `FilterNode`: フィルターノード（1入力1出力、Low/High/Band Pass、カットオフ周波数、Q値）
-- `SpectrumAnalyzerNode`: スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
-- `CompressorNode`: コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
-- `PitchShiftNode`: ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
-- `GraphicEqNode`: グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
+利用可能なノード型（各サブモジュールで定義）：
+- `AudioInputNode` (io.rs): オーディオ入力デバイスノード（出力ピン = チャンネル数、スペクトラム表示統合）
+- `AudioOutputNode` (io.rs): オーディオ出力デバイスノード（入力ピン = チャンネル数、スペクトラム表示統合）
+- `GainNode` (effects.rs): ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
+- `AddNode` (math.rs): 加算ノード（2入力1出力、A + B）
+- `MultiplyNode` (math.rs): 乗算ノード（2入力1出力、A × B、リングモジュレーション用）
+- `FilterNode` (effects.rs): フィルターノード（1入力1出力、Low/High/Band Pass、カットオフ周波数、Q値）
+- `SpectrumAnalyzerNode` (analyzer.rs): スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
+- `CompressorNode` (effects.rs): コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
+- `PitchShiftNode` (effects.rs): ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
+- `GraphicEqNode` (effects.rs): グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
 
-ファクトリ関数でノードを生成：
-- `new_audio_input()`, `new_audio_output()`, `new_gain()`, `new_add()`, `new_multiply()`
-- `new_filter()`, `new_spectrum_analyzer()`, `new_compressor()`, `new_pitch_shift()`, `new_graphic_eq()`
+ファクトリ関数でノードを生成（nodes/mod.rsで定義）：
+- `new_audio_input(device_name, channels)`, `new_audio_output(device_name, channels)`: チャンネル数を指定して生成
+- `new_gain()`, `new_add()`, `new_multiply()`, `new_filter()`, `new_spectrum_analyzer()`
+- `new_compressor()`, `new_pitch_shift()`, `new_graphic_eq()`
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。
@@ -118,12 +122,19 @@ cpalを使用したオーディオデバイス管理システム。
   - `input_buffers`: ノード自身の入力バッファ（データコピー先、処理用）
   - `output_buffer`: ノード自身の出力バッファ
 - `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, PitchShift, GraphicEq, PassThrough）
-- 処理フロー:
-  1. ソースバッファから`read_and_consume()`でアトミックにデータを読み取り・消費し、入力バッファへコピー
-  2. 入力バッファから読み取り、DSP処理を行い、出力バッファに書き込み
-  3. PassThrough（出力ノードへのルーティング）はソースから直接出力バッファにコピー
+- 処理フロー（スナップショット方式）:
+  1. **Phase 1 - スナップショット作成**: 全ソースバッファから`read()`でデータを読み取り、スナップショットを作成
+     - 同じソースバッファを複数ノードが参照していても、データは一度だけ読み取る
+     - `HashMap<バッファアドレス, (データ, 消費済みフラグ)>`で管理
+  2. **Phase 2 - ノード処理**: スナップショットから入力バッファへコピーし、DSP処理を実行
+     - PassThrough（出力ノードへのルーティング）はソースから直接出力バッファにコピー
+  3. **Phase 3 - データ消費**: 使用したソースバッファから`consume()`でデータを削除（各バッファ一度だけ）
 - スレッドセーフなDSP状態管理（`Arc<Mutex<>>`でUI/処理スレッド間共有）
 - バッファ蓄積防止のため、利用可能なデータをできるだけ多く処理（最大8倍まで）
+
+スナップショット方式の利点:
+- 複数の出力ノードへの分岐時にデータが消失しない（従来の`read_and_consume()`では最初の消費者がデータを取り、後続が空になる問題があった）
+- 各ソースバッファのデータは全コンシューマーが読み取った後に一度だけ消費される
 
 ### AudioGraphViewer (viewer.rs)
 egui-snarlのSnarlViewerトレイトを実装。
@@ -153,10 +164,10 @@ egui-snarlのSnarlViewerトレイトを実装。
 ### 処理フロー
 1. `AudioInput`ノードがデバイスからインターリーブされた音声データを取得
 2. データはチャンネルごとに分離され、各`ChannelBuffer`（リングバッファ）に書き込まれる
-3. `EffectProcessor`スレッドがトポロジカル順序で全ノードを処理
-   - ソースノードの出力バッファから`read_and_consume()`でデータを取得
-   - 自身の入力バッファ（または直接出力バッファ）にコピー
-   - DSP処理を行い、出力バッファに書き込む
+3. `EffectProcessor`スレッドがスナップショット方式で全ノードを処理
+   - Phase 1: 全ソースバッファからスナップショットを作成（各バッファ一度だけ）
+   - Phase 2: スナップショットから入力バッファへコピー、DSP処理、出力バッファに書き込み
+   - Phase 3: 使用したソースバッファからデータを消費（各バッファ一度だけ）
    - 出力ノードへのルーティングもPassThroughとして同様に処理
 4. `AudioOutput`ノードは自身のバッファからデータを読み取り、デバイスに出力
 

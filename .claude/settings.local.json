@@ -13,7 +13,8 @@
       "Bash(cargo run:*)",
       "mcp__context7__resolve-library-id",
       "Bash(cargo doc:*)",
-      "Bash(timeout 5 cargo run:*)"
+      "Bash(timeout 5 cargo run:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []

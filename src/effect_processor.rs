@@ -2,6 +2,7 @@
 //!
 //! リアルタイムオーディオレートでエフェクトノードを処理する専用スレッド
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -11,6 +12,10 @@ use parking_lot::Mutex;
 
 use crate::dsp::{BiquadCoeffs, CompressorParams};
 use crate::nodes::{ChannelBuffer, FilterType};
+
+/// ソースバッファのスナップショットを管理するための型
+/// キー: バッファのアドレス、値: (スナップショットデータ, 消費済みフラグ)
+type SourceSnapshot = HashMap<usize, (Vec<f32>, bool)>;
 
 /// 処理対象のエフェクトノード情報
 #[derive(Clone)]
@@ -136,7 +141,30 @@ impl EffectProcessor {
                 let max_block_size = base_block_size * 8; // 最大8倍まで
 
                 // 各ノードを順番に処理（トポロジカル順序で渡されていると仮定）
-                // 各ノードごとに利用可能なデータ量をチェックして処理する
+                // 分岐時のデータ消費問題を防ぐため、スナップショット方式で処理
+
+                // Phase 1: 全ソースバッファのスナップショットを作成
+                // 同じソースバッファを複数ノードが参照している場合でも
+                // データを一度だけ読み取り、共有する
+                let mut source_snapshots: SourceSnapshot = HashMap::new();
+
+                for node_info in &nodes_snapshot {
+                    for source in &node_info.source_buffers {
+                        let addr = Arc::as_ptr(source) as usize;
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            source_snapshots.entry(addr)
+                        {
+                            let buf = source.lock();
+                            let available = buf.len().min(max_block_size);
+                            if available > 0 {
+                                let data = buf.read(available);
+                                e.insert((data, false));
+                            }
+                        }
+                    }
+                }
+
+                // Phase 2: 各ノードをスナップショットを使って処理
                 for node_info in &nodes_snapshot {
                     // このノードのソースバッファの最小利用可能サンプル数を確認
                     let min_available = if node_info.source_buffers.is_empty() {
@@ -145,7 +173,13 @@ impl EffectProcessor {
                         node_info
                             .source_buffers
                             .iter()
-                            .map(|buf| buf.lock().len())
+                            .map(|buf| {
+                                let addr = Arc::as_ptr(buf) as usize;
+                                source_snapshots
+                                    .get(&addr)
+                                    .map(|(data, _)| data.len())
+                                    .unwrap_or(0)
+                            })
                             .min()
                             .unwrap_or(0)
                     };
@@ -155,10 +189,28 @@ impl EffectProcessor {
 
                     // データがある場合のみ処理
                     if actual_block_size > 0 {
-                        // ソースバッファからノードの入力バッファへデータをコピー
-                        Self::copy_source_to_input(node_info, actual_block_size);
+                        // スナップショットからノードの入力バッファへデータをコピー
+                        Self::copy_source_to_input_from_snapshot(
+                            node_info,
+                            actual_block_size,
+                            &source_snapshots,
+                        );
                         // ノードを処理
                         Self::process_node(node_info, actual_block_size, sr);
+                    }
+                }
+
+                // Phase 3: 使用したソースバッファからデータを消費
+                for node_info in &nodes_snapshot {
+                    for source in &node_info.source_buffers {
+                        let addr = Arc::as_ptr(source) as usize;
+                        if let Some((data, consumed)) = source_snapshots.get_mut(&addr) {
+                            if !*consumed {
+                                // まだ消費されていない場合のみ消費
+                                source.lock().consume(data.len());
+                                *consumed = true;
+                            }
+                        }
                     }
                 }
 
@@ -186,15 +238,23 @@ impl EffectProcessor {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// ソースバッファからノードの入力バッファへデータをコピー
-    /// read_and_consumeでアトミックに読み取りと消費を行い、競合状態を防ぐ
+    /// スナップショットからノードの入力バッファへデータをコピー
+    /// 分岐時に同じソースバッファが複数ノードで参照されていても
+    /// 事前に取得したスナップショットから読み取るため、データの消失を防ぐ
     /// PassThroughの場合は直接出力バッファにコピー（入力バッファを経由しない）
-    fn copy_source_to_input(node_info: &EffectNodeInfo, block_size: usize) {
+    fn copy_source_to_input_from_snapshot(
+        node_info: &EffectNodeInfo,
+        block_size: usize,
+        snapshots: &SourceSnapshot,
+    ) {
         // PassThroughの場合は直接出力バッファにコピー
         if matches!(node_info.node_type, EffectNodeType::PassThrough) {
             if let Some(source) = node_info.source_buffers.first() {
-                let temp = source.lock().read_and_consume(block_size);
-                node_info.output_buffer.lock().push(&temp);
+                let addr = Arc::as_ptr(source) as usize;
+                if let Some((data, _)) = snapshots.get(&addr) {
+                    let len = block_size.min(data.len());
+                    node_info.output_buffer.lock().push(&data[..len]);
+                }
             }
             return;
         }
@@ -205,10 +265,11 @@ impl EffectProcessor {
             .iter()
             .zip(node_info.input_buffers.iter())
         {
-            // ソースバッファから読み取りと消費をアトミックに行う
-            // これにより、readとconsumeの間にpushが入る競合状態を防ぐ
-            let temp = source.lock().read_and_consume(block_size);
-            input.lock().push(&temp);
+            let addr = Arc::as_ptr(source) as usize;
+            if let Some((data, _)) = snapshots.get(&addr) {
+                let len = block_size.min(data.len());
+                input.lock().push(&data[..len]);
+            }
         }
     }
 

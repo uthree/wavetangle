@@ -413,3 +413,126 @@ impl ProjectFile {
         serde_json::from_str(&json).map_err(|e| e.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::NodeBehavior;
+
+    #[test]
+    fn test_saved_node_serialization_with_channels() {
+        // AudioInputノードのシリアライズ
+        let saved = SavedNode::AudioInput {
+            device_name: "Test Device".to_string(),
+            channels: 1,
+            show_spectrum: true,
+        };
+        let json = serde_json::to_string(&saved).unwrap();
+        assert!(json.contains("\"channels\":1"));
+
+        // デシリアライズ
+        let restored: SavedNode = serde_json::from_str(&json).unwrap();
+        if let SavedNode::AudioInput {
+            device_name,
+            channels,
+            show_spectrum,
+        } = restored
+        {
+            assert_eq!(device_name, "Test Device");
+            assert_eq!(channels, 1);
+            assert!(show_spectrum);
+        } else {
+            panic!("Expected AudioInput");
+        }
+    }
+
+    #[test]
+    fn test_saved_node_backward_compatibility() {
+        // 古い形式（channelsフィールドなし）のJSONをデシリアライズ
+        let old_json = r#"{"type":"AudioInput","device_name":"Test Device","show_spectrum":false}"#;
+        let restored: SavedNode = serde_json::from_str(old_json).unwrap();
+        if let SavedNode::AudioInput {
+            device_name,
+            channels,
+            show_spectrum,
+        } = restored
+        {
+            assert_eq!(device_name, "Test Device");
+            assert_eq!(channels, 2); // デフォルト値
+            assert!(!show_spectrum);
+        } else {
+            panic!("Expected AudioInput");
+        }
+
+        // AudioOutputも同様にテスト
+        let old_json = r#"{"type":"AudioOutput","device_name":"Test Output","show_spectrum":true}"#;
+        let restored: SavedNode = serde_json::from_str(old_json).unwrap();
+        if let SavedNode::AudioOutput {
+            device_name,
+            channels,
+            show_spectrum,
+        } = restored
+        {
+            assert_eq!(device_name, "Test Output");
+            assert_eq!(channels, 2); // デフォルト値
+            assert!(show_spectrum);
+        } else {
+            panic!("Expected AudioOutput");
+        }
+    }
+
+    #[test]
+    fn test_project_file_roundtrip() {
+        use egui_snarl::Snarl;
+
+        // Snarlにノードを追加
+        let mut snarl: Snarl<AudioNode> = Snarl::new();
+        let input_node = AudioInputNode::new("Input Device".to_string(), 1);
+        let output_node = AudioOutputNode::new("Output Device".to_string(), 2);
+
+        let input_id = snarl.insert_node(egui::Pos2::new(100.0, 100.0), Box::new(input_node));
+        let output_id = snarl.insert_node(egui::Pos2::new(300.0, 100.0), Box::new(output_node));
+
+        // 接続を追加
+        snarl.connect(
+            egui_snarl::OutPinId {
+                node: input_id,
+                output: 0,
+            },
+            egui_snarl::InPinId {
+                node: output_id,
+                input: 0,
+            },
+        );
+
+        // プロジェクトファイルに変換
+        let project = ProjectFile::from_snarl(&snarl);
+
+        // JSONにシリアライズしてデシリアライズ
+        let json = serde_json::to_string(&project).unwrap();
+        let restored_project: ProjectFile = serde_json::from_str(&json).unwrap();
+
+        // Snarlに戻す
+        let restored_snarl = restored_project.to_snarl();
+
+        // ノード数を確認
+        assert_eq!(restored_snarl.node_ids().count(), 2);
+
+        // チャンネル数を確認
+        for (_, node) in restored_snarl.node_ids() {
+            match node.node_type() {
+                NodeType::AudioInput => {
+                    let n = node.as_any().downcast_ref::<AudioInputNode>().unwrap();
+                    assert_eq!(n.channels, 1);
+                    assert_eq!(n.output_count(), 1);
+                }
+                NodeType::AudioOutput => {
+                    let n = node.as_any().downcast_ref::<AudioOutputNode>().unwrap();
+                    assert_eq!(n.channels, 2);
+                    assert_eq!(n.input_count(), 2);
+                }
+                _ => panic!("Unexpected node type"),
+            }
+        }
+    }
+}

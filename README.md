@@ -12,12 +12,15 @@ Rust製リアルタイムオーディオ処理ツール
 - ピッチシフト
 
 ## 実行方法
-1. このリポジトリをクローン
+1. プログラミング言語Rustをインストールする。すでにインストールされていればこの手順はスキップ。  
+[Rust公式サイト](https://rust-lang.org/ja/tools/install/)
+
+2. このリポジトリをクローン
 ```sh
 git clone https://github.com/uthree/wavetangle
 ```
 
-2. cargoでビルド、実行
+3. cargoでビルド、実行
 ```sh
 cd wavetangle
 cargo run --release

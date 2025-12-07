@@ -417,7 +417,7 @@ impl ProjectFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodes::NodeBehavior;
+    use crate::nodes::{AudioInputPort, AudioOutputPort};
 
     #[test]
     fn test_saved_node_serialization_with_channels() {

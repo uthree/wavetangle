@@ -1,8 +1,8 @@
 use egui::Ui;
 
 use super::{
-    impl_as_any, new_channel_buffer, ChannelBuffer, NodeBehavior, NodeType, NodeUIContext, PinType,
-    DEFAULT_RING_BUFFER_SIZE,
+    impl_as_any, new_channel_buffer, AudioInputPort, AudioOutputPort, ChannelBuffer, NodeBase,
+    NodeType, NodeUI, NodeUIContext, PinType, DEFAULT_RING_BUFFER_SIZE,
 };
 
 // ============================================================================
@@ -37,7 +37,8 @@ impl Default for AddNode {
     }
 }
 
-impl NodeBehavior for AddNode {
+// AddNodeのトレイト実装（2入力1出力）
+impl NodeBase for AddNode {
     fn node_type(&self) -> NodeType {
         NodeType::Add
     }
@@ -47,25 +48,15 @@ impl NodeBehavior for AddNode {
     }
 
     impl_as_any!();
+}
 
+impl AudioInputPort for AddNode {
     fn input_count(&self) -> usize {
         2
     }
 
-    fn output_count(&self) -> usize {
-        1
-    }
-
     fn input_pin_type(&self, index: usize) -> Option<PinType> {
         if index < 2 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
             Some(PinType::Audio)
         } else {
             None
@@ -80,16 +71,30 @@ impl NodeBehavior for AddNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+}
+
+impl AudioOutputPort for AddNode {
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn output_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
     fn output_pin_name(&self, index: usize) -> Option<&str> {
         if index == 0 {
             Some("Out")
         } else {
             None
         }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
     }
 
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
@@ -105,7 +110,9 @@ impl NodeBehavior for AddNode {
     }
 
     fn set_channels(&mut self, _channels: u16) {}
+}
 
+impl NodeUI for AddNode {
     fn is_active(&self) -> bool {
         self.is_active
     }
@@ -153,7 +160,8 @@ impl Default for MultiplyNode {
     }
 }
 
-impl NodeBehavior for MultiplyNode {
+// MultiplyNodeのトレイト実装（2入力1出力）
+impl NodeBase for MultiplyNode {
     fn node_type(&self) -> NodeType {
         NodeType::Multiply
     }
@@ -163,25 +171,15 @@ impl NodeBehavior for MultiplyNode {
     }
 
     impl_as_any!();
+}
 
+impl AudioInputPort for MultiplyNode {
     fn input_count(&self) -> usize {
         2
     }
 
-    fn output_count(&self) -> usize {
-        1
-    }
-
     fn input_pin_type(&self, index: usize) -> Option<PinType> {
         if index < 2 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
             Some(PinType::Audio)
         } else {
             None
@@ -196,16 +194,30 @@ impl NodeBehavior for MultiplyNode {
         }
     }
 
+    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+}
+
+impl AudioOutputPort for MultiplyNode {
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn output_pin_type(&self, index: usize) -> Option<PinType> {
+        if index == 0 {
+            Some(PinType::Audio)
+        } else {
+            None
+        }
+    }
+
     fn output_pin_name(&self, index: usize) -> Option<&str> {
         if index == 0 {
             Some("Out")
         } else {
             None
         }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
     }
 
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
@@ -221,7 +233,9 @@ impl NodeBehavior for MultiplyNode {
     }
 
     fn set_channels(&mut self, _channels: u16) {}
+}
 
+impl NodeUI for MultiplyNode {
     fn is_active(&self) -> bool {
         self.is_active
     }

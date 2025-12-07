@@ -5,9 +5,84 @@ use egui_plot::{Line, Plot, PlotPoints, Points};
 use parking_lot::Mutex;
 
 use super::{
-    impl_as_any, interpolate_eq_gain, new_channel_buffer, ChannelBuffer, NodeBehavior, NodeType,
-    NodeUIContext, PinType, DEFAULT_RING_BUFFER_SIZE, EQ_FFT_SIZE,
+    impl_as_any, interpolate_eq_gain, new_channel_buffer, AudioInputPort, AudioOutputPort,
+    ChannelBuffer, NodeBase, NodeType, NodeUI, NodeUIContext, PinType, DEFAULT_RING_BUFFER_SIZE,
+    EQ_FFT_SIZE,
 };
+
+/// 1入力1出力エフェクトノード用のAudioInputPort実装マクロ
+macro_rules! impl_single_input_port {
+    ($ty:ty) => {
+        impl AudioInputPort for $ty {
+            fn input_count(&self) -> usize {
+                1
+            }
+
+            fn input_pin_type(&self, index: usize) -> Option<PinType> {
+                if index == 0 {
+                    Some(PinType::Audio)
+                } else {
+                    None
+                }
+            }
+
+            fn input_pin_name(&self, index: usize) -> Option<&str> {
+                if index == 0 {
+                    Some("In")
+                } else {
+                    None
+                }
+            }
+
+            fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+                self.input_buffers.get(index).cloned()
+            }
+        }
+    };
+}
+
+/// 1入力1出力エフェクトノード用のAudioOutputPort実装マクロ
+macro_rules! impl_single_output_port {
+    ($ty:ty) => {
+        impl AudioOutputPort for $ty {
+            fn output_count(&self) -> usize {
+                1
+            }
+
+            fn output_pin_type(&self, index: usize) -> Option<PinType> {
+                if index == 0 {
+                    Some(PinType::Audio)
+                } else {
+                    None
+                }
+            }
+
+            fn output_pin_name(&self, index: usize) -> Option<&str> {
+                if index == 0 {
+                    Some("Out")
+                } else {
+                    None
+                }
+            }
+
+            fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+                if channel == 0 {
+                    Some(self.output_buffer.clone())
+                } else {
+                    None
+                }
+            }
+
+            fn channels(&self) -> u16 {
+                1
+            }
+
+            fn set_channels(&mut self, _channels: u16) {
+                // 1入力1出力エフェクトは常に1チャンネル
+            }
+        }
+    };
+}
 
 // ============================================================================
 // Gain Node (Effect)
@@ -43,7 +118,8 @@ impl Default for GainNode {
     }
 }
 
-impl NodeBehavior for GainNode {
+// GainNodeのトレイト実装（マクロを使用）
+impl NodeBase for GainNode {
     fn node_type(&self) -> NodeType {
         NodeType::Gain
     }
@@ -53,67 +129,12 @@ impl NodeBehavior for GainNode {
     }
 
     impl_as_any!();
+}
 
-    fn input_count(&self) -> usize {
-        1
-    }
+impl_single_input_port!(GainNode);
+impl_single_output_port!(GainNode);
 
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn input_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("In")
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("Out")
-        } else {
-            None
-        }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
-    }
-
-    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        if channel == 0 {
-            Some(self.output_buffer.clone())
-        } else {
-            None
-        }
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn set_channels(&mut self, _channels: u16) {
-        // GainNodeは常に1チャンネル
-    }
-
+impl NodeUI for GainNode {
     fn is_active(&self) -> bool {
         self.is_active
     }
@@ -202,7 +223,8 @@ impl Default for FilterNode {
     }
 }
 
-impl NodeBehavior for FilterNode {
+// FilterNodeのトレイト実装（マクロを使用）
+impl NodeBase for FilterNode {
     fn node_type(&self) -> NodeType {
         NodeType::Filter
     }
@@ -212,65 +234,12 @@ impl NodeBehavior for FilterNode {
     }
 
     impl_as_any!();
+}
 
-    fn input_count(&self) -> usize {
-        1
-    }
+impl_single_input_port!(FilterNode);
+impl_single_output_port!(FilterNode);
 
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn input_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("In")
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("Out")
-        } else {
-            None
-        }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
-    }
-
-    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        if channel == 0 {
-            Some(self.output_buffer.clone())
-        } else {
-            None
-        }
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn set_channels(&mut self, _channels: u16) {}
-
+impl NodeUI for FilterNode {
     fn is_active(&self) -> bool {
         self.is_active
     }
@@ -358,7 +327,8 @@ impl Default for CompressorNode {
     }
 }
 
-impl NodeBehavior for CompressorNode {
+// CompressorNodeのトレイト実装（マクロを使用）
+impl NodeBase for CompressorNode {
     fn node_type(&self) -> NodeType {
         NodeType::Compressor
     }
@@ -368,65 +338,12 @@ impl NodeBehavior for CompressorNode {
     }
 
     impl_as_any!();
+}
 
-    fn input_count(&self) -> usize {
-        1
-    }
+impl_single_input_port!(CompressorNode);
+impl_single_output_port!(CompressorNode);
 
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn input_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("In")
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("Out")
-        } else {
-            None
-        }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
-    }
-
-    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        if channel == 0 {
-            Some(self.output_buffer.clone())
-        } else {
-            None
-        }
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn set_channels(&mut self, _channels: u16) {}
-
+impl NodeUI for CompressorNode {
     fn is_active(&self) -> bool {
         self.is_active
     }
@@ -529,7 +446,8 @@ impl Default for PitchShiftNode {
     }
 }
 
-impl NodeBehavior for PitchShiftNode {
+// PitchShiftNodeのトレイト実装（マクロを使用）
+impl NodeBase for PitchShiftNode {
     fn node_type(&self) -> NodeType {
         NodeType::PitchShift
     }
@@ -539,65 +457,12 @@ impl NodeBehavior for PitchShiftNode {
     }
 
     impl_as_any!();
+}
 
-    fn input_count(&self) -> usize {
-        1
-    }
+impl_single_input_port!(PitchShiftNode);
+impl_single_output_port!(PitchShiftNode);
 
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn input_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("In")
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("Out")
-        } else {
-            None
-        }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
-    }
-
-    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        if channel == 0 {
-            Some(self.output_buffer.clone())
-        } else {
-            None
-        }
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn set_channels(&mut self, _channels: u16) {}
-
+impl NodeUI for PitchShiftNode {
     fn is_active(&self) -> bool {
         self.is_active
     }
@@ -757,7 +622,8 @@ impl Default for GraphicEqNode {
     }
 }
 
-impl NodeBehavior for GraphicEqNode {
+// GraphicEqNodeのトレイト実装（マクロを使用）
+impl NodeBase for GraphicEqNode {
     fn node_type(&self) -> NodeType {
         NodeType::GraphicEq
     }
@@ -767,65 +633,12 @@ impl NodeBehavior for GraphicEqNode {
     }
 
     impl_as_any!();
+}
 
-    fn input_count(&self) -> usize {
-        1
-    }
+impl_single_input_port!(GraphicEqNode);
+impl_single_output_port!(GraphicEqNode);
 
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index == 0 {
-            Some(PinType::Audio)
-        } else {
-            None
-        }
-    }
-
-    fn input_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("In")
-        } else {
-            None
-        }
-    }
-
-    fn output_pin_name(&self, index: usize) -> Option<&str> {
-        if index == 0 {
-            Some("Out")
-        } else {
-            None
-        }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
-    }
-
-    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        if channel == 0 {
-            Some(self.output_buffer.clone())
-        } else {
-            None
-        }
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn set_channels(&mut self, _channels: u16) {}
-
+impl NodeUI for GraphicEqNode {
     fn is_active(&self) -> bool {
         self.is_active
     }

@@ -46,19 +46,47 @@ UI描画時に必要なコンテキストを保持する構造体：
 - `output_devices`: 出力デバイス名のリスト
 - `node_id`: ウィジェットの一意識別用ノードID
 
-### NodeBehavior trait (nodes/mod.rs)
-すべてのノードが実装するトレイト。共通インターフェースを定義：
+### ノードトレイト設計 (nodes/mod.rs)
+ノードの機能は4つの独立したトレイトに分割されており、入力専用/出力専用/中間ノードを適切に表現できる：
+
+#### NodeBase trait
+ノードの基本情報を提供するコアトレイト：
 - `node_type()`: ノードの型を返す（NodeType enum）
-- `as_any()`, `as_any_mut()`: ダウンキャスト用のAny参照を取得
 - `title()`: ノードのタイトル
-- `input_count()`, `output_count()`: ピン数（チャンネル数に連動）
-- `input_pin_type()`, `output_pin_type()`: ピンタイプ
-- `input_pin_name()`, `output_pin_name()`: ピン名（L, R, C, LFE, SL, SR）
+- `as_any()`, `as_any_mut()`: ダウンキャスト用のAny参照を取得
+
+#### AudioInputPort trait
+オーディオ入力ポートを持つノード向けトレイト（デフォルト実装あり）：
+- `input_count()`: 入力ピン数（デフォルト: 0）
+- `input_pin_type()`: 入力ピンタイプ
+- `input_pin_name()`: 入力ピン名
+- `input_buffer()`: 指定入力ピンのバッファを取得
+
+#### AudioOutputPort trait
+オーディオ出力ポートを持つノード向けトレイト（デフォルト実装あり）：
+- `output_count()`: 出力ピン数（デフォルト: 0）
+- `output_pin_type()`: 出力ピンタイプ
+- `output_pin_name()`: 出力ピン名
 - `channel_buffer()`: 指定チャンネルの出力バッファを取得
-- `input_buffer()`: 指定入力ピンのバッファを取得（エフェクトノード用）
-- `channels()`, `set_channels()`: チャンネル数（ストリーム開始時に設定、ピン数も更新）
+- `channels()`, `set_channels()`: チャンネル数
+
+#### NodeUI trait
+ノードのUI描画機能を提供するトレイト：
 - `is_active()`, `set_active()`: アクティブ状態
 - `show_body()`: ノードボディのUI描画（NodeUIContextを受け取る）
+
+#### NodeBehavior trait（スーパートレイト）
+上記4トレイトを統合したスーパートレイト。ブランケット実装により自動的に付与される：
+```rust
+pub trait NodeBehavior: NodeBase + AudioInputPort + AudioOutputPort + NodeUI {}
+impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T {}
+```
+
+このトレイト分割により：
+- `AudioInputNode`: `AudioOutputPort`のみ実装（出力専用）
+- `AudioOutputNode`: `AudioInputPort`のみ実装（入力専用）
+- エフェクトノード: 両方のポートトレイトを実装（中間ノード）
+- 将来的にMIDIポート用トレイトを追加可能
 
 ### NodeType enum (nodes/mod.rs)
 ノードの型を識別するためのenum：
@@ -144,13 +172,19 @@ egui-snarlのSnarlViewerトレイトを実装。
 - コンテキストメニュー（ノード追加・削除）
 
 新しいノードタイプを追加する際は：
-1. 構造体を定義（`channel_buffers: Vec<ChannelBuffer>`または`input_buffer`/`output_buffer`を含む）
-2. `NodeBehavior`トレイトを実装（`node_type()`, `as_any()`, `as_any_mut()`, `show_body()`など）
+1. 構造体を定義（`input_buffers`/`output_buffer`フィールドを含む）
+2. 以下の4トレイトを実装：
+   - `NodeBase`: `node_type()`, `title()`, `as_any()`, `as_any_mut()` （`impl_as_any!()`マクロ使用可）
+   - `AudioInputPort`: 入力ポートがある場合は実装（なければ空実装でデフォルト使用）
+   - `AudioOutputPort`: 出力ポートがある場合は実装（なければ空実装でデフォルト使用）
+   - `NodeUI`: `is_active()`, `set_active()`, `show_body()`
 3. `NodeType` enumにバリアントを追加
 4. ファクトリ関数を追加（`new_xxx() -> AudioNode`）
 5. `viewer.rs`の`show_graph_menu`を更新（ノード追加メニュー）
 6. `project.rs`のシリアライズ/デシリアライズを更新
 7. 必要に応じて`graph.rs`と`effect_processor.rs`を更新
+
+1入力1出力のエフェクトノードの場合は`impl_single_input_port!`と`impl_single_output_port!`マクロを活用可能。
 
 ## データフロー
 

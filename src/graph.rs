@@ -5,8 +5,9 @@ use egui_snarl::{InPinId, NodeId, Snarl};
 use crate::audio::{AudioSystem, OutputStreamId};
 use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
 use crate::nodes::{
-    AudioInputNode, AudioNode, AudioOutputNode, ChannelBuffer, CompressorNode, FilterNode,
-    GainNode, GraphicEqNode, NodeBehavior, NodeType, PitchShiftNode, SpectrumAnalyzerNode,
+    AudioInputNode, AudioInputPort, AudioNode, AudioOutputNode, AudioOutputPort, ChannelBuffer,
+    CompressorNode, FilterNode, GainNode, GraphicEqNode, NodeType, PitchShiftNode,
+    SpectrumAnalyzerNode,
 };
 
 /// アクティブノードの状態

@@ -237,6 +237,8 @@ pub fn new_channel_buffer(capacity: usize) -> ChannelBuffer {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PinType {
     Audio,
+    // 将来のMIDIサポート用
+    // Midi,
 }
 
 /// ノードの種類を識別するenum
@@ -254,9 +256,13 @@ pub enum NodeType {
     GraphicEq,
 }
 
-/// すべてのノードが実装するトレイト
-#[allow(dead_code)]
-pub trait NodeBehavior: Any {
+// ============================================================================
+// 分離されたトレイト定義
+// ============================================================================
+
+/// ノードの基本情報を提供するトレイト
+/// すべてのノードが実装する必要がある
+pub trait NodeBase: Any {
     /// ノードの種類を取得
     fn node_type(&self) -> NodeType;
 
@@ -268,37 +274,70 @@ pub trait NodeBehavior: Any {
 
     /// Anyとしての可変参照を取得（ダウンキャスト用）
     fn as_any_mut(&mut self) -> &mut dyn Any;
+}
 
+/// オーディオ入力ポートを持つノードのトレイト
+/// 入力ピン（接続を受け取る側）の機能を提供
+/// デフォルト実装は「入力なし」を表す
+pub trait AudioInputPort {
     /// 入力ピンの数
-    fn input_count(&self) -> usize;
-
-    /// 出力ピンの数
-    fn output_count(&self) -> usize;
+    fn input_count(&self) -> usize {
+        0
+    }
 
     /// 入力ピンのタイプ
-    fn input_pin_type(&self, index: usize) -> Option<PinType>;
-
-    /// 出力ピンのタイプ
-    fn output_pin_type(&self, index: usize) -> Option<PinType>;
+    fn input_pin_type(&self, _index: usize) -> Option<PinType> {
+        None
+    }
 
     /// 入力ピンの名前
-    fn input_pin_name(&self, index: usize) -> Option<&str>;
+    fn input_pin_name(&self, _index: usize) -> Option<&str> {
+        None
+    }
+
+    /// 指定入力ピンのバッファを取得
+    fn input_buffer(&self, _index: usize) -> Option<ChannelBuffer> {
+        None
+    }
+}
+
+/// オーディオ出力ポートを持つノードのトレイト
+/// 出力ピン（接続を送り出す側）の機能を提供
+/// デフォルト実装は「出力なし」を表す
+#[allow(dead_code)]
+pub trait AudioOutputPort {
+    /// 出力ピンの数
+    fn output_count(&self) -> usize {
+        0
+    }
+
+    /// 出力ピンのタイプ
+    fn output_pin_type(&self, _index: usize) -> Option<PinType> {
+        None
+    }
 
     /// 出力ピンの名前
-    fn output_pin_name(&self, index: usize) -> Option<&str>;
-
-    /// 指定入力ピンのバッファを取得（エフェクトノード用）
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer>;
+    fn output_pin_name(&self, _index: usize) -> Option<&str> {
+        None
+    }
 
     /// 指定チャンネルの出力バッファを取得
-    fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer>;
+    fn channel_buffer(&self, _channel: usize) -> Option<ChannelBuffer> {
+        None
+    }
 
     /// オーディオチャンネル数を取得
-    fn channels(&self) -> u16;
+    fn channels(&self) -> u16 {
+        0
+    }
 
     /// オーディオチャンネル数を設定（バッファも再作成）
-    fn set_channels(&mut self, channels: u16);
+    fn set_channels(&mut self, _channels: u16) {}
+}
 
+/// ノードのUI描画機能を提供するトレイト
+#[allow(dead_code)]
+pub trait NodeUI {
     /// アクティブ状態を取得
     fn is_active(&self) -> bool;
 
@@ -308,6 +347,21 @@ pub trait NodeBehavior: Any {
     /// ノードボディのUIを描画
     fn show_body(&mut self, ui: &mut Ui, ctx: &NodeUIContext);
 }
+
+/// すべてのオーディオノードが実装する複合トレイト
+/// NodeBase + AudioInputPort + AudioOutputPort + NodeUI を組み合わせる
+///
+/// 各ノードは必要なトレイトのみを実装し、
+/// 不要な機能はデフォルト実装を使用できる：
+/// - AudioInputNode: AudioOutputPortのみ実装（出力専用）
+/// - AudioOutputNode: AudioInputPortのみ実装（入力専用）
+/// - エフェクトノード: 両方実装（入出力あり）
+pub trait NodeBehavior: NodeBase + AudioInputPort + AudioOutputPort + NodeUI {}
+
+/// NodeBehaviorのブランケット実装
+/// NodeBase + AudioInputPort + AudioOutputPort + NodeUI を実装した型は
+/// 自動的にNodeBehaviorを実装する
+impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T {}
 
 /// デフォルトのリングバッファサイズ（サンプル数）
 /// 4096 = 約85ms @ 48kHz（レイテンシと安定性のバランス）
@@ -549,5 +603,403 @@ mod tests {
         assert_eq!(node.output_pin_name(4), Some("SL"));
         assert_eq!(node.output_pin_name(5), Some("SR"));
         assert_eq!(node.output_pin_name(6), None);
+    }
+
+    #[test]
+    fn test_audio_input_node_trait_separation() {
+        // AudioInputNodeは出力ポートのみを持つ（入力ポートは持たない）
+        let node = AudioInputNode::new("test".to_string(), 2);
+
+        // 入力ポートはデフォルト実装（0個）
+        assert_eq!(node.input_count(), 0);
+        assert_eq!(node.input_pin_type(0), None);
+        assert_eq!(node.input_pin_name(0), None);
+        assert!(node.input_buffer(0).is_none());
+
+        // 出力ポートはチャンネル数に応じて存在
+        assert_eq!(node.output_count(), 2);
+        assert_eq!(node.output_pin_type(0), Some(PinType::Audio));
+        assert_eq!(node.output_pin_name(0), Some("L"));
+        assert!(node.channel_buffer(0).is_some());
+    }
+
+    #[test]
+    fn test_audio_output_node_trait_separation() {
+        // AudioOutputNodeは入力ポートのみを持つ（出力ポートは持たない）
+        let node = AudioOutputNode::new("test".to_string(), 2);
+
+        // 入力ポートはチャンネル数に応じて存在
+        assert_eq!(node.input_count(), 2);
+        assert_eq!(node.input_pin_type(0), Some(PinType::Audio));
+        assert_eq!(node.input_pin_name(0), Some("L"));
+
+        // 出力ポートはデフォルト実装（0個）
+        assert_eq!(node.output_count(), 0);
+        assert_eq!(node.output_pin_type(0), None);
+        assert_eq!(node.output_pin_name(0), None);
+    }
+
+    #[test]
+    fn test_effect_node_trait_separation() {
+        // エフェクトノードは入力と出力の両方を持つ
+        let gain = GainNode::new();
+        assert_eq!(gain.input_count(), 1);
+        assert_eq!(gain.output_count(), 1);
+        assert_eq!(gain.input_pin_type(0), Some(PinType::Audio));
+        assert_eq!(gain.output_pin_type(0), Some(PinType::Audio));
+        assert_eq!(gain.input_pin_name(0), Some("In"));
+        assert_eq!(gain.output_pin_name(0), Some("Out"));
+
+        let filter = FilterNode::new();
+        assert_eq!(filter.input_count(), 1);
+        assert_eq!(filter.output_count(), 1);
+
+        let compressor = CompressorNode::new();
+        assert_eq!(compressor.input_count(), 1);
+        assert_eq!(compressor.output_count(), 1);
+
+        let pitch_shift = PitchShiftNode::new();
+        assert_eq!(pitch_shift.input_count(), 1);
+        assert_eq!(pitch_shift.output_count(), 1);
+
+        let graphic_eq = GraphicEqNode::new();
+        assert_eq!(graphic_eq.input_count(), 1);
+        assert_eq!(graphic_eq.output_count(), 1);
+
+        let spectrum = SpectrumAnalyzerNode::new();
+        assert_eq!(spectrum.input_count(), 1);
+        assert_eq!(spectrum.output_count(), 1);
+    }
+
+    #[test]
+    fn test_multi_input_node_trait_separation() {
+        // AddNodeとMultiplyNodeは2入力1出力
+        let add = AddNode::new();
+        assert_eq!(add.input_count(), 2);
+        assert_eq!(add.output_count(), 1);
+        assert_eq!(add.input_pin_name(0), Some("A"));
+        assert_eq!(add.input_pin_name(1), Some("B"));
+        assert_eq!(add.output_pin_name(0), Some("Out"));
+        assert!(add.input_buffer(0).is_some());
+        assert!(add.input_buffer(1).is_some());
+        assert!(add.input_buffer(2).is_none());
+
+        let multiply = MultiplyNode::new();
+        assert_eq!(multiply.input_count(), 2);
+        assert_eq!(multiply.output_count(), 1);
+        assert_eq!(multiply.input_pin_name(0), Some("A"));
+        assert_eq!(multiply.input_pin_name(1), Some("B"));
+    }
+
+    // ========================================================================
+    // AudioBuffer テスト
+    // ========================================================================
+
+    #[test]
+    fn test_audio_buffer_push_and_read() {
+        let mut buffer = super::AudioBuffer::new(10);
+
+        // 空のバッファからの読み取り
+        let data = buffer.read(5);
+        assert_eq!(data, vec![0.0, 0.0, 0.0, 0.0, 0.0]);
+
+        // データをプッシュ
+        buffer.push(&[1.0, 2.0, 3.0]);
+        assert_eq!(buffer.len(), 3);
+
+        // 読み取り（状態は変わらない）
+        let data = buffer.read(3);
+        assert_eq!(data, vec![1.0, 2.0, 3.0]);
+        assert_eq!(buffer.len(), 3); // 状態変更なし
+
+        // 2回目の読み取りも同じ結果
+        let data = buffer.read(3);
+        assert_eq!(data, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_audio_buffer_consume() {
+        let mut buffer = super::AudioBuffer::new(10);
+        buffer.push(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+
+        // 2サンプル消費
+        buffer.consume(2);
+        assert_eq!(buffer.len(), 3);
+
+        // 残りのデータを確認
+        let data = buffer.read(3);
+        assert_eq!(data, vec![3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn test_audio_buffer_capacity_overflow() {
+        let mut buffer = super::AudioBuffer::new(5);
+
+        // 容量を超えてプッシュ
+        buffer.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+
+        // 最新の5サンプルのみ保持される
+        assert_eq!(buffer.len(), 5);
+        let data = buffer.read(5);
+        assert_eq!(data, vec![3.0, 4.0, 5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn test_audio_buffer_multiple_consumers() {
+        // 複数のコンシューマーが同じデータを読み取れることをテスト
+        let buffer = super::new_channel_buffer(10);
+
+        // データをプッシュ
+        {
+            let mut buf = buffer.lock();
+            buf.push(&[1.0, 2.0, 3.0, 4.0]);
+        }
+
+        // コンシューマー1が読み取り
+        let data1 = {
+            let buf = buffer.lock();
+            buf.read(4)
+        };
+
+        // コンシューマー2も同じデータを読み取れる
+        let data2 = {
+            let buf = buffer.lock();
+            buf.read(4)
+        };
+
+        assert_eq!(data1, data2);
+        assert_eq!(data1, vec![1.0, 2.0, 3.0, 4.0]);
+
+        // 消費後はデータがなくなる
+        {
+            let mut buf = buffer.lock();
+            buf.consume(4);
+        }
+
+        let data3 = {
+            let buf = buffer.lock();
+            buf.read(4)
+        };
+        assert_eq!(data3, vec![0.0, 0.0, 0.0, 0.0]);
+    }
+
+    // ========================================================================
+    // 音声処理シミュレーションテスト
+    // ========================================================================
+
+    #[test]
+    fn test_gain_processing_simulation() {
+        // GainNodeの処理をシミュレート
+        let gain_node = GainNode::new();
+        let gain_value = 0.5f32;
+
+        // 入力バッファにテストデータを書き込み
+        let input_buffer = gain_node.input_buffer(0).unwrap();
+        {
+            let mut buf = input_buffer.lock();
+            buf.push(&[1.0, 0.5, -0.5, -1.0]);
+        }
+
+        // ゲイン処理をシミュレート（EffectProcessorが行う処理）
+        let processed: Vec<f32> = {
+            let buf = input_buffer.lock();
+            buf.read(4).iter().map(|&s| s * gain_value).collect()
+        };
+
+        assert_eq!(processed, vec![0.5, 0.25, -0.25, -0.5]);
+    }
+
+    #[test]
+    fn test_add_processing_simulation() {
+        // AddNodeの処理をシミュレート
+        let add_node = AddNode::new();
+
+        // 入力A
+        let input_a = add_node.input_buffer(0).unwrap();
+        {
+            let mut buf = input_a.lock();
+            buf.push(&[1.0, 2.0, 3.0, 4.0]);
+        }
+
+        // 入力B
+        let input_b = add_node.input_buffer(1).unwrap();
+        {
+            let mut buf = input_b.lock();
+            buf.push(&[0.5, 0.5, 0.5, 0.5]);
+        }
+
+        // 加算処理をシミュレート
+        let processed: Vec<f32> = {
+            let buf_a = input_a.lock();
+            let buf_b = input_b.lock();
+            let data_a = buf_a.read(4);
+            let data_b = buf_b.read(4);
+            data_a
+                .iter()
+                .zip(data_b.iter())
+                .map(|(&a, &b)| a + b)
+                .collect()
+        };
+
+        assert_eq!(processed, vec![1.5, 2.5, 3.5, 4.5]);
+    }
+
+    #[test]
+    fn test_multiply_processing_simulation() {
+        // MultiplyNodeの処理をシミュレート（リングモジュレーション）
+        let multiply_node = MultiplyNode::new();
+
+        // 入力A（キャリア信号）
+        let input_a = multiply_node.input_buffer(0).unwrap();
+        {
+            let mut buf = input_a.lock();
+            buf.push(&[1.0, 0.5, -0.5, -1.0]);
+        }
+
+        // 入力B（モジュレータ信号）
+        let input_b = multiply_node.input_buffer(1).unwrap();
+        {
+            let mut buf = input_b.lock();
+            buf.push(&[1.0, 1.0, 1.0, 0.5]);
+        }
+
+        // 乗算処理をシミュレート
+        let processed: Vec<f32> = {
+            let buf_a = input_a.lock();
+            let buf_b = input_b.lock();
+            let data_a = buf_a.read(4);
+            let data_b = buf_b.read(4);
+            data_a
+                .iter()
+                .zip(data_b.iter())
+                .map(|(&a, &b)| a * b)
+                .collect()
+        };
+
+        assert_eq!(processed, vec![1.0, 0.5, -0.5, -0.5]);
+    }
+
+    #[test]
+    fn test_node_chain_simulation() {
+        // ノードチェーン: Source -> Gain(0.5) -> Output
+        // 実際のEffectProcessorの処理フローをシミュレート
+
+        let source_buffer = super::new_channel_buffer(100);
+        let gain_node = GainNode::new();
+        let output_buffer = super::new_channel_buffer(100);
+        let gain_value = 0.5f32;
+
+        // ソースにテストデータを書き込み（サイン波をシミュレート）
+        let test_signal: Vec<f32> = (0..64).map(|i| (i as f32 * 0.1).sin()).collect();
+        {
+            let mut buf = source_buffer.lock();
+            buf.push(&test_signal);
+        }
+
+        // Phase 1: スナップショット作成
+        let snapshot = {
+            let buf = source_buffer.lock();
+            buf.read(64)
+        };
+
+        // Phase 2: 処理（ソース -> Gain入力）
+        {
+            let input_buffer = gain_node.input_buffer(0).unwrap();
+            let mut buf = input_buffer.lock();
+            buf.push(&snapshot);
+        }
+
+        // Gain処理
+        let processed: Vec<f32> = {
+            let input_buffer = gain_node.input_buffer(0).unwrap();
+            let buf = input_buffer.lock();
+            buf.read(64).iter().map(|&s| s * gain_value).collect()
+        };
+
+        // 出力バッファに書き込み
+        {
+            let mut buf = output_buffer.lock();
+            buf.push(&processed);
+        }
+
+        // Phase 3: 消費
+        {
+            let mut buf = source_buffer.lock();
+            buf.consume(64);
+        }
+
+        // 検証
+        let output_data = {
+            let buf = output_buffer.lock();
+            buf.read(64)
+        };
+
+        // 各サンプルが正しくゲイン処理されていることを確認
+        for (i, &sample) in output_data.iter().enumerate() {
+            let expected = (i as f32 * 0.1).sin() * 0.5;
+            assert!(
+                (sample - expected).abs() < 1e-6,
+                "Sample {} mismatch: {} vs {}",
+                i,
+                sample,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_signal_branching_simulation() {
+        // 分岐テスト: Source -> [Output1, Output2]
+        // 同じソースから複数の出力へ分岐する場合のテスト
+
+        let source_buffer = super::new_channel_buffer(100);
+        let output1_buffer = super::new_channel_buffer(100);
+        let output2_buffer = super::new_channel_buffer(100);
+
+        // ソースにデータを書き込み
+        {
+            let mut buf = source_buffer.lock();
+            buf.push(&[1.0, 2.0, 3.0, 4.0]);
+        }
+
+        // スナップショット方式で読み取り（各出力が同じデータを受け取る）
+        let snapshot = {
+            let buf = source_buffer.lock();
+            buf.read(4)
+        };
+
+        // 出力1にコピー
+        {
+            let mut buf = output1_buffer.lock();
+            buf.push(&snapshot);
+        }
+
+        // 出力2にもコピー（同じデータ）
+        {
+            let mut buf = output2_buffer.lock();
+            buf.push(&snapshot);
+        }
+
+        // 消費は一度だけ
+        {
+            let mut buf = source_buffer.lock();
+            buf.consume(4);
+        }
+
+        // 両方の出力が同じデータを受け取ったことを確認
+        let data1 = {
+            let buf = output1_buffer.lock();
+            buf.read(4)
+        };
+        let data2 = {
+            let buf = output2_buffer.lock();
+            buf.read(4)
+        };
+
+        assert_eq!(data1, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(data2, vec![1.0, 2.0, 3.0, 4.0]);
+
+        // ソースは空になっている
+        assert_eq!(source_buffer.lock().len(), 0);
     }
 }

@@ -95,6 +95,18 @@ impl AudioSystem {
             .find(|d| d.name().map(|n| n == name).unwrap_or(false))
     }
 
+    /// 入力デバイスのデフォルトチャンネル数を取得
+    pub fn input_device_channels(&self, name: &str) -> Option<u16> {
+        let device = self.get_input_device(name)?;
+        device.default_input_config().ok().map(|c| c.channels())
+    }
+
+    /// 出力デバイスのデフォルトチャンネル数を取得
+    pub fn output_device_channels(&self, name: &str) -> Option<u16> {
+        let device = self.get_output_device(name)?;
+        device.default_output_config().ok().map(|c| c.channels())
+    }
+
     /// 設定からStreamConfigを作成
     fn build_stream_config(&self, device: &Device, is_input: bool) -> Result<StreamConfig, String> {
         let default_config = if is_input {

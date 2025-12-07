@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use egui::{Color32, Ui};
 use egui_snarl::ui::{PinInfo, SnarlPin, SnarlViewer};
 use egui_snarl::{InPin, NodeId, OutPin, Snarl};
@@ -18,15 +20,42 @@ fn pin_color(pin_type: PinType) -> Color32 {
 pub struct AudioGraphViewer {
     pub input_devices: Vec<String>,
     pub output_devices: Vec<String>,
+    /// 入力デバイス名→チャンネル数のマップ
+    pub input_device_channels: HashMap<String, u16>,
+    /// 出力デバイス名→チャンネル数のマップ
+    pub output_device_channels: HashMap<String, u16>,
 }
 
 impl AudioGraphViewer {
     /// キャッシュされたデバイスリストから作成
-    pub fn with_devices(input_devices: Vec<String>, output_devices: Vec<String>) -> Self {
+    pub fn with_devices(
+        input_devices: Vec<String>,
+        output_devices: Vec<String>,
+        input_device_channels: HashMap<String, u16>,
+        output_device_channels: HashMap<String, u16>,
+    ) -> Self {
         Self {
             input_devices,
             output_devices,
+            input_device_channels,
+            output_device_channels,
         }
+    }
+
+    /// 入力デバイスのチャンネル数を取得（不明な場合は2を返す）
+    fn get_input_channels(&self, device_name: &str) -> u16 {
+        self.input_device_channels
+            .get(device_name)
+            .copied()
+            .unwrap_or(2)
+    }
+
+    /// 出力デバイスのチャンネル数を取得（不明な場合は2を返す）
+    fn get_output_channels(&self, device_name: &str) -> u16 {
+        self.output_device_channels
+            .get(device_name)
+            .copied()
+            .unwrap_or(2)
     }
 }
 
@@ -142,8 +171,9 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
                 ui.label("No input devices");
             } else {
                 for device_name in &self.input_devices.clone() {
+                    let channels = self.get_input_channels(device_name);
                     if ui.button(device_name).clicked() {
-                        snarl.insert_node(pos, new_audio_input(device_name.clone()));
+                        snarl.insert_node(pos, new_audio_input(device_name.clone(), channels));
                         ui.close();
                     }
                 }
@@ -155,8 +185,9 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
                 ui.label("No output devices");
             } else {
                 for device_name in &self.output_devices.clone() {
+                    let channels = self.get_output_channels(device_name);
                     if ui.button(device_name).clicked() {
-                        snarl.insert_node(pos, new_audio_output(device_name.clone()));
+                        snarl.insert_node(pos, new_audio_output(device_name.clone(), channels));
                         ui.close();
                     }
                 }

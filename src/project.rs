@@ -17,6 +17,9 @@ use crate::nodes::{
 const PROJECT_VERSION: u32 = 1;
 
 // デフォルト値関数（後方互換性のため）
+fn default_channels() -> u16 {
+    2
+}
 fn default_phase_alignment_enabled() -> bool {
     true
 }
@@ -53,10 +56,14 @@ pub struct Connection {
 pub enum SavedNode {
     AudioInput {
         device_name: String,
+        #[serde(default = "default_channels")]
+        channels: u16,
         show_spectrum: bool,
     },
     AudioOutput {
         device_name: String,
+        #[serde(default = "default_channels")]
+        channels: u16,
         show_spectrum: bool,
     },
     Gain {
@@ -173,6 +180,7 @@ impl ProjectFile {
                     let n = node.as_any().downcast_ref::<AudioInputNode>().unwrap();
                     SavedNode::AudioInput {
                         device_name: n.device_name.clone(),
+                        channels: n.channels,
                         show_spectrum: n.show_spectrum,
                     }
                 }
@@ -180,6 +188,7 @@ impl ProjectFile {
                     let n = node.as_any().downcast_ref::<AudioOutputNode>().unwrap();
                     SavedNode::AudioOutput {
                         device_name: n.device_name.clone(),
+                        channels: n.channels,
                         show_spectrum: n.show_spectrum,
                     }
                 }
@@ -278,17 +287,19 @@ impl ProjectFile {
             let audio_node: AudioNode = match saved_node {
                 SavedNode::AudioInput {
                     device_name,
+                    channels,
                     show_spectrum,
                 } => {
-                    let mut node = AudioInputNode::new(device_name.clone());
+                    let mut node = AudioInputNode::new(device_name.clone(), *channels);
                     node.show_spectrum = *show_spectrum;
                     Box::new(node)
                 }
                 SavedNode::AudioOutput {
                     device_name,
+                    channels,
                     show_spectrum,
                 } => {
-                    let mut node = AudioOutputNode::new(device_name.clone());
+                    let mut node = AudioOutputNode::new(device_name.clone(), *channels);
                     node.show_spectrum = *show_spectrum;
                     Box::new(node)
                 }

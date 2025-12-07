@@ -6,6 +6,7 @@ mod nodes;
 mod project;
 mod viewer;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -27,6 +28,10 @@ struct WavetangleApp {
     /// キャッシュされたデバイスリスト
     input_devices: Vec<String>,
     output_devices: Vec<String>,
+    /// 入力デバイス名→チャンネル数のマップ
+    input_device_channels: HashMap<String, u16>,
+    /// 出力デバイス名→チャンネル数のマップ
+    output_device_channels: HashMap<String, u16>,
     /// Audio Settings ウィンドウの表示状態
     show_audio_settings: bool,
     /// 現在開いているファイルのパス
@@ -77,6 +82,21 @@ impl WavetangleApp {
         let audio_system = AudioSystem::new();
         let input_devices = audio_system.input_device_names();
         let output_devices = audio_system.output_device_names();
+
+        // デバイスのチャンネル数マップを構築（入力と出力は別々に管理）
+        let mut input_device_channels = HashMap::new();
+        let mut output_device_channels = HashMap::new();
+        for name in &input_devices {
+            if let Some(ch) = audio_system.input_device_channels(name) {
+                input_device_channels.insert(name.clone(), ch);
+            }
+        }
+        for name in &output_devices {
+            if let Some(ch) = audio_system.output_device_channels(name) {
+                output_device_channels.insert(name.clone(), ch);
+            }
+        }
+
         Self {
             snarl: Snarl::new(),
             snarl_style: SnarlStyle::default(),
@@ -84,6 +104,8 @@ impl WavetangleApp {
             graph_processor: AudioGraphProcessor::new(),
             input_devices,
             output_devices,
+            input_device_channels,
+            output_device_channels,
             show_audio_settings: false,
             current_file_path: None,
             status_message: None,
@@ -231,6 +253,19 @@ impl eframe::App for WavetangleApp {
                     if ui.button("Refresh Devices").clicked() {
                         self.input_devices = self.audio_system.input_device_names();
                         self.output_devices = self.audio_system.output_device_names();
+                        // チャンネル数マップを再構築（入力と出力は別々に管理）
+                        self.input_device_channels.clear();
+                        self.output_device_channels.clear();
+                        for name in &self.input_devices {
+                            if let Some(ch) = self.audio_system.input_device_channels(name) {
+                                self.input_device_channels.insert(name.clone(), ch);
+                            }
+                        }
+                        for name in &self.output_devices {
+                            if let Some(ch) = self.audio_system.output_device_channels(name) {
+                                self.output_device_channels.insert(name.clone(), ch);
+                            }
+                        }
                         ui.close();
                     }
                 });
@@ -358,6 +393,8 @@ impl eframe::App for WavetangleApp {
             let mut viewer = AudioGraphViewer::with_devices(
                 self.input_devices.clone(),
                 self.output_devices.clone(),
+                self.input_device_channels.clone(),
+                self.output_device_channels.clone(),
             );
             self.snarl
                 .show(&mut viewer, &self.snarl_style, "audio_graph", ui);

@@ -392,8 +392,8 @@ impl Clone for AudioInputNode {
 }
 
 impl AudioInputNode {
-    pub fn new(device_name: String) -> Self {
-        let channels = 2u16; // デフォルトはステレオ
+    pub fn new(device_name: String, channels: u16) -> Self {
+        let channels = channels.max(1); // 最低1チャンネル
         let channel_buffers = (0..channels)
             .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
             .collect();
@@ -432,7 +432,7 @@ impl NodeBehavior for AudioInputNode {
     }
 
     fn output_count(&self) -> usize {
-        self.channels as usize
+        self.channel_buffers.len()
     }
 
     fn input_pin_type(&self, _index: usize) -> Option<PinType> {
@@ -440,7 +440,7 @@ impl NodeBehavior for AudioInputNode {
     }
 
     fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index < self.channels as usize {
+        if index < self.channel_buffers.len() {
             Some(PinType::Audio)
         } else {
             None
@@ -546,8 +546,8 @@ impl Clone for AudioOutputNode {
 }
 
 impl AudioOutputNode {
-    pub fn new(device_name: String) -> Self {
-        let channels = 2u16; // デフォルトはステレオ
+    pub fn new(device_name: String, channels: u16) -> Self {
+        let channels = channels.max(1); // 最低1チャンネル
         let channel_buffers = (0..channels)
             .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
             .collect();
@@ -582,7 +582,7 @@ impl NodeBehavior for AudioOutputNode {
     impl_as_any!();
 
     fn input_count(&self) -> usize {
-        self.channels as usize
+        self.channel_buffers.len()
     }
 
     fn output_count(&self) -> usize {
@@ -590,7 +590,7 @@ impl NodeBehavior for AudioOutputNode {
     }
 
     fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index < self.channels as usize {
+        if index < self.channel_buffers.len() {
             Some(PinType::Audio)
         } else {
             None
@@ -2123,13 +2123,13 @@ impl NodeBehavior for GraphicEqNode {
 pub type AudioNode = Box<dyn NodeBehavior>;
 
 /// AudioInputノードを作成
-pub fn new_audio_input(device_name: String) -> AudioNode {
-    Box::new(AudioInputNode::new(device_name))
+pub fn new_audio_input(device_name: String, channels: u16) -> AudioNode {
+    Box::new(AudioInputNode::new(device_name, channels))
 }
 
 /// AudioOutputノードを作成
-pub fn new_audio_output(device_name: String) -> AudioNode {
-    Box::new(AudioOutputNode::new(device_name))
+pub fn new_audio_output(device_name: String, channels: u16) -> AudioNode {
+    Box::new(AudioOutputNode::new(device_name, channels))
 }
 
 /// Gainノードを作成

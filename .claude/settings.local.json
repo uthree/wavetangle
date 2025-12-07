@@ -12,7 +12,8 @@
       "Bash(pkill:*)",
       "Bash(cargo run:*)",
       "mcp__context7__resolve-library-id",
-      "Bash(cargo doc:*)"
+      "Bash(cargo doc:*)",
+      "Bash(timeout 5 cargo run:*)"
     ],
     "deny": [],
     "ask": []

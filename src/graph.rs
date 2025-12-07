@@ -70,9 +70,9 @@ impl AudioGraphProcessor {
                 AudioNode::AudioInput(input_node) => {
                     if input_node.is_active {
                         // 最初のチャンネルからデータを取得してスペクトラム解析（常に更新）
+                        // read()は状態を変更しないので、データを消費せずに読み取れる
                         if let Some(buffer) = input_node.channel_buffers.first() {
-                            let mut samples = vec![0.0f32; FFT_SIZE];
-                            buffer.lock().peek(&mut samples);
+                            let samples = buffer.lock().read(FFT_SIZE);
 
                             let mut analyzer = input_node.analyzer.lock();
                             analyzer.push_samples(&samples);
@@ -86,12 +86,12 @@ impl AudioGraphProcessor {
                 AudioNode::AudioOutput(output_node) => {
                     if output_node.is_active {
                         // アクティブノードからソースバッファを取得してスペクトラム解析
+                        // read()は状態を変更しないので、データを消費せずに読み取れる
                         if let Some(ActiveNodeState::Output(source_buffers)) =
                             self.active_nodes.get(&node_id)
                         {
                             if let Some(buffer) = source_buffers.first() {
-                                let mut samples = vec![0.0f32; FFT_SIZE];
-                                buffer.lock().peek(&mut samples);
+                                let samples = buffer.lock().read(FFT_SIZE);
 
                                 let mut analyzer = output_node.analyzer.lock();
                                 analyzer.push_samples(&samples);

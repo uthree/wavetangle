@@ -143,7 +143,7 @@ impl EffectProcessor {
                 // 最小利用可能サンプル数を確認
                 let min_available = all_source_buffers
                     .iter()
-                    .map(|buf| buf.lock().available())
+                    .map(|buf| buf.lock().len())
                     .min()
                     .unwrap_or(0);
 
@@ -162,9 +162,9 @@ impl EffectProcessor {
                         Self::process_node(node_info, actual_block_size, sr);
                     }
 
-                    // ステップ3: ソースバッファの読み取り位置を進める
+                    // ステップ3: ソースバッファのデータを消費
                     for buf in &all_source_buffers {
-                        buf.lock().advance_read(actual_block_size);
+                        buf.lock().consume(actual_block_size);
                     }
                 }
 
@@ -199,19 +199,11 @@ impl EffectProcessor {
             .iter()
             .zip(node_info.input_buffers.iter())
         {
-            let mut temp = vec![0.0f32; block_size];
+            // ソースバッファから読み取り（read - 状態を変更しない）
+            let temp = source.lock().read(block_size);
 
-            // ソースバッファから読み取り（peek - 位置を進めない）
-            {
-                let source_buf = source.lock();
-                source_buf.peek(&mut temp);
-            }
-
-            // 入力バッファに書き込み
-            {
-                let mut input_buf = input.lock();
-                input_buf.write(&temp);
-            }
+            // 入力バッファに追加
+            input.lock().push(&temp);
         }
     }
 
@@ -304,19 +296,20 @@ impl EffectProcessor {
             }
         };
 
-        // 出力バッファに書き込み
-        let mut output = node_info.output_buffer.lock();
-        output.write(&output_data);
+        // 出力バッファに追加
+        node_info.output_buffer.lock().push(&output_data);
     }
 
-    /// 入力バッファからサンプルを読み取り（read - 位置を進める）
+    /// 入力バッファからサンプルを読み取り、消費する
     fn read_from_input_buffer(buffers: &[ChannelBuffer], index: usize, count: usize) -> Vec<f32> {
-        let mut samples = vec![0.0; count];
         if let Some(buffer) = buffers.get(index) {
             let mut buf = buffer.lock();
-            buf.read(&mut samples);
+            let samples = buf.read(count);
+            buf.consume(count);
+            samples
+        } else {
+            vec![0.0; count]
         }
-        samples
     }
 }
 

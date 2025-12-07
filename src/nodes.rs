@@ -1,73 +1,87 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-/// リングバッファ - 音声データの低遅延転送用
+/// オーディオバッファ - シンプルなFIFO設計
+///
+/// 設計原則:
+/// - `push()`: データを追加（状態変更）
+/// - `read()`: データのコピーを取得（状態変更なし）
+/// - `consume()`: 先頭からデータを削除（状態変更）
+///
+/// 読み取りは状態を変更しないため、複数のコンシューマーが
+/// 同じバッファから安全にデータを読み取ることができる。
 #[derive(Clone)]
-pub struct RingBuffer {
-    data: Vec<f32>,
-    write_pos: usize,
-    read_pos: usize,
+pub struct AudioBuffer {
+    data: VecDeque<f32>,
     capacity: usize,
 }
 
-impl RingBuffer {
+impl AudioBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
-            data: vec![0.0; capacity],
-            write_pos: 0,
-            read_pos: 0,
+            data: VecDeque::with_capacity(capacity),
             capacity,
         }
     }
 
-    /// データを書き込む
-    pub fn write(&mut self, samples: &[f32]) {
+    /// サンプルを末尾に追加（プロデューサー用）
+    /// 容量を超える場合は古いデータを自動的に削除
+    pub fn push(&mut self, samples: &[f32]) {
         for &sample in samples {
-            self.data[self.write_pos] = sample;
-            self.write_pos = (self.write_pos + 1) % self.capacity;
+            if self.data.len() >= self.capacity {
+                self.data.pop_front();
+            }
+            self.data.push_back(sample);
         }
     }
 
-    /// データを読み込む（読み込んだ分だけ進む）
-    pub fn read(&mut self, output: &mut [f32]) {
-        for sample in output.iter_mut() {
-            *sample = self.data[self.read_pos];
-            self.read_pos = (self.read_pos + 1) % self.capacity;
+    /// 先頭からn個のサンプルのコピーを取得（状態変更なし）
+    /// バッファが足りない場合は0.0でパディング
+    pub fn read(&self, count: usize) -> Vec<f32> {
+        let mut result = Vec::with_capacity(count);
+        for i in 0..count {
+            if i < self.data.len() {
+                result.push(self.data[i]);
+            } else {
+                result.push(0.0);
+            }
         }
+        result
     }
 
-    /// データを読み込む（読み取り位置を進めない - 複数のコンシューマー用）
-    pub fn peek(&self, output: &mut [f32]) {
-        let mut pos = self.read_pos;
-        for sample in output.iter_mut() {
-            *sample = self.data[pos];
-            pos = (pos + 1) % self.capacity;
-        }
-    }
-
-    /// 読み取り位置を指定サンプル数だけ進める
-    pub fn advance_read(&mut self, count: usize) {
-        self.read_pos = (self.read_pos + count) % self.capacity;
+    /// 先頭からn個のサンプルを削除（消費済みとしてマーク）
+    /// グラフプロセッサーが全てのコンシューマー処理後に呼ぶ
+    pub fn consume(&mut self, count: usize) {
+        let n = count.min(self.data.len());
+        self.data.drain(0..n);
     }
 
     /// 利用可能なサンプル数
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// バッファが空かどうか
     #[allow(dead_code)]
-    pub fn available(&self) -> usize {
-        if self.write_pos >= self.read_pos {
-            self.write_pos - self.read_pos
-        } else {
-            self.capacity - self.read_pos + self.write_pos
-        }
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// バッファをクリア
+    #[allow(dead_code)]
+    pub fn clear(&mut self) {
+        self.data.clear();
     }
 }
 
-/// チャンネルバッファ - 1チャンネル分のリングバッファ
-pub type ChannelBuffer = Arc<Mutex<RingBuffer>>;
+/// チャンネルバッファ - 1チャンネル分のオーディオバッファ
+pub type ChannelBuffer = Arc<Mutex<AudioBuffer>>;
 
 /// 新しいチャンネルバッファを作成
 pub fn new_channel_buffer(capacity: usize) -> ChannelBuffer {
-    Arc::new(Mutex::new(RingBuffer::new(capacity)))
+    Arc::new(Mutex::new(AudioBuffer::new(capacity)))
 }
 
 /// ノードのピンタイプ

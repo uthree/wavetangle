@@ -136,7 +136,7 @@ impl AudioSystem {
                         let samples: Vec<f32> = (0..frame_count)
                             .map(|frame| data[frame * channels as usize + ch])
                             .collect();
-                        buf.write(&samples);
+                        buf.push(&samples);
                     }
                 },
                 |err| eprintln!("Input stream error: {}", err),
@@ -177,46 +177,31 @@ impl AudioSystem {
 
                     let frame_count = data.len() / channels as usize;
 
-                    // 同じバッファを複数チャンネルで共有する場合に対応
-                    // まず、ユニークなバッファを特定し、各バッファから1回だけ読み込む
-                    let mut unique_buffers: Vec<(usize, ChannelBuffer)> = Vec::new();
-                    let mut channel_to_unique: Vec<usize> = Vec::with_capacity(channels as usize);
-
+                    // ユニークなバッファを特定（consume用）
+                    let mut unique_buffers: Vec<ChannelBuffer> = Vec::new();
                     for ch in 0..channels as usize {
                         let source_ch = ch.min(num_channels - 1);
                         let buf = &channel_buffers[source_ch];
-
-                        // 既存のユニークバッファと比較
-                        let existing_idx = unique_buffers
-                            .iter()
-                            .position(|(_, existing)| Arc::ptr_eq(buf, existing));
-
-                        if let Some(idx) = existing_idx {
-                            // 既存のバッファを参照
-                            channel_to_unique.push(idx);
-                        } else {
-                            // 新しいユニークバッファとして追加
-                            channel_to_unique.push(unique_buffers.len());
-                            unique_buffers.push((source_ch, buf.clone()));
+                        if !unique_buffers.iter().any(|b| Arc::ptr_eq(b, buf)) {
+                            unique_buffers.push(buf.clone());
                         }
                     }
 
-                    // ユニークバッファごとに1回だけ読み込み
-                    let mut read_data: Vec<Vec<f32>> = Vec::with_capacity(unique_buffers.len());
-                    for (_, buf) in &unique_buffers {
-                        let mut temp = vec![0.0f32; frame_count];
-                        buf.lock().read(&mut temp);
-                        read_data.push(temp);
-                    }
-
-                    // 各チャンネルに対応するデータをインターリーブして出力
+                    // 各チャンネルからデータを読み取ってインターリーブ
+                    // read()は状態を変更しないため、同じバッファを複数回読んでも安全
                     for ch in 0..channels as usize {
-                        let unique_idx = channel_to_unique[ch];
-                        let samples = &read_data[unique_idx];
+                        let source_ch = ch.min(num_channels - 1);
+                        let buf = channel_buffers[source_ch].lock();
+                        let samples = buf.read(frame_count);
 
                         for (frame, &sample) in samples.iter().enumerate() {
                             data[frame * channels as usize + ch] = sample;
                         }
+                    }
+
+                    // 全チャンネル読み取り後、ユニークバッファごとに1回だけconsume
+                    for buf in &unique_buffers {
+                        buf.lock().consume(frame_count);
                     }
                 },
                 |err| eprintln!("Output stream error: {}", err),

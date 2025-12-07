@@ -1128,6 +1128,12 @@ pub struct PitchShiftNode {
     pub grain_size: usize,
     /// グレイン数（2〜16）
     pub num_grains: usize,
+    /// 位相アラインメントを有効にするか
+    pub phase_alignment_enabled: bool,
+    /// 位相アラインメントの探索範囲（グレインサイズに対する割合、0.1〜1.0）
+    pub search_range_ratio: f32,
+    /// 位相アラインメントの相関長（グレインサイズに対する割合、0.1〜1.0）
+    pub correlation_length_ratio: f32,
     /// 入力バッファ（1入力）
     pub input_buffers: Vec<ChannelBuffer>,
     /// 出力バッファ
@@ -1144,6 +1150,9 @@ impl Clone for PitchShiftNode {
             semitones: self.semitones,
             grain_size: self.grain_size,
             num_grains: self.num_grains,
+            phase_alignment_enabled: self.phase_alignment_enabled,
+            search_range_ratio: self.search_range_ratio,
+            correlation_length_ratio: self.correlation_length_ratio,
             input_buffers: self.input_buffers.clone(),
             output_buffer: self.output_buffer.clone(),
             is_active: self.is_active,
@@ -1159,10 +1168,14 @@ impl Clone for PitchShiftNode {
 
 impl PitchShiftNode {
     pub fn new() -> Self {
+        let default_params = crate::dsp::PhaseAlignmentParams::default();
         Self {
             semitones: 0.0,
             grain_size: crate::dsp::DEFAULT_GRAIN_SIZE,
             num_grains: crate::dsp::DEFAULT_NUM_GRAINS,
+            phase_alignment_enabled: default_params.enabled,
+            search_range_ratio: default_params.search_range_ratio,
+            correlation_length_ratio: default_params.correlation_length_ratio,
             input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,

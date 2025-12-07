@@ -638,6 +638,29 @@ impl AudioGraphViewer {
             let latency_samples = node.grain_size * node.num_grains / 2;
             let latency_ms = latency_samples as f32 / 48.0;
             ui.label(format!("Latency: ~{:.1} ms", latency_ms));
+
+            ui.separator();
+
+            // 位相アラインメント設定
+            ui.collapsing("Phase Alignment", |ui| {
+                ui.checkbox(&mut node.phase_alignment_enabled, "Enabled");
+
+                ui.add_enabled_ui(node.phase_alignment_enabled, |ui| {
+                    ui.label("Search Range:");
+                    ui.add(
+                        egui::Slider::new(&mut node.search_range_ratio, 0.1..=1.0)
+                            .suffix("x")
+                            .fixed_decimals(2),
+                    );
+
+                    ui.label("Correlation Length:");
+                    ui.add(
+                        egui::Slider::new(&mut node.correlation_length_ratio, 0.1..=1.0)
+                            .suffix("x")
+                            .fixed_decimals(2),
+                    );
+                });
+            });
         });
     }
 

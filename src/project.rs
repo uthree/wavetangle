@@ -16,6 +16,17 @@ use crate::nodes::{
 /// プロジェクトファイルのバージョン
 const PROJECT_VERSION: u32 = 1;
 
+// デフォルト値関数（後方互換性のため）
+fn default_phase_alignment_enabled() -> bool {
+    true
+}
+fn default_search_range_ratio() -> f32 {
+    0.5
+}
+fn default_correlation_length_ratio() -> f32 {
+    0.75
+}
+
 /// ノードの位置情報
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NodePosition {
@@ -70,6 +81,12 @@ pub enum SavedNode {
         semitones: f32,
         grain_size: usize,
         num_grains: usize,
+        #[serde(default = "default_phase_alignment_enabled")]
+        phase_alignment_enabled: bool,
+        #[serde(default = "default_search_range_ratio")]
+        search_range_ratio: f32,
+        #[serde(default = "default_correlation_length_ratio")]
+        correlation_length_ratio: f32,
     },
     GraphicEq {
         eq_points: Vec<SavedEqPoint>,
@@ -180,6 +197,9 @@ impl ProjectFile {
                     semitones: n.semitones,
                     grain_size: n.grain_size,
                     num_grains: n.num_grains,
+                    phase_alignment_enabled: n.phase_alignment_enabled,
+                    search_range_ratio: n.search_range_ratio,
+                    correlation_length_ratio: n.correlation_length_ratio,
                 },
                 AudioNode::GraphicEq(n) => SavedNode::GraphicEq {
                     eq_points: n.eq_points.iter().map(SavedEqPoint::from).collect(),
@@ -291,15 +311,26 @@ impl ProjectFile {
                     semitones,
                     grain_size,
                     num_grains,
+                    phase_alignment_enabled,
+                    search_range_ratio,
+                    correlation_length_ratio,
                 } => {
                     let mut node = PitchShiftNode::new();
                     node.semitones = *semitones;
                     node.grain_size = *grain_size;
                     node.num_grains = *num_grains;
+                    node.phase_alignment_enabled = *phase_alignment_enabled;
+                    node.search_range_ratio = *search_range_ratio;
+                    node.correlation_length_ratio = *correlation_length_ratio;
                     // PitchShifterにもパラメータを反映
                     if let Some(mut shifter) = node.pitch_shifter.try_lock() {
                         shifter.set_grain_size(*grain_size);
                         shifter.set_num_grains(*num_grains);
+                        shifter.set_phase_alignment(crate::dsp::PhaseAlignmentParams {
+                            enabled: *phase_alignment_enabled,
+                            search_range_ratio: *search_range_ratio,
+                            correlation_length_ratio: *correlation_length_ratio,
+                        });
                     }
                     AudioNode::PitchShift(node)
                 }

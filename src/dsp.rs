@@ -331,6 +331,27 @@ pub const DEFAULT_GRAIN_SIZE: usize = 1024;
 /// デフォルトのグレイン数
 pub const DEFAULT_NUM_GRAINS: usize = 4;
 
+/// 位相アラインメントの探索パラメータ
+#[derive(Clone, Copy, Debug)]
+pub struct PhaseAlignmentParams {
+    /// 探索範囲（グレインサイズに対する割合、0.0〜1.0）
+    pub search_range_ratio: f32,
+    /// 相関計算に使うサンプル数（グレインサイズに対する割合、0.0〜1.0）
+    pub correlation_length_ratio: f32,
+    /// 位相アラインメントを有効にするか
+    pub enabled: bool,
+}
+
+impl Default for PhaseAlignmentParams {
+    fn default() -> Self {
+        Self {
+            search_range_ratio: 0.5,        // グレインサイズの50%
+            correlation_length_ratio: 0.75, // グレインサイズの75%
+            enabled: true,
+        }
+    }
+}
+
 /// グラニュラー合成ベースのピッチシフター
 pub struct PitchShifter {
     /// 入力リングバッファ
@@ -353,6 +374,8 @@ pub struct PitchShifter {
     sample_count: usize,
     /// 窓関数
     window: Vec<f32>,
+    /// 位相アラインメントパラメータ
+    phase_alignment: PhaseAlignmentParams,
 }
 
 impl PitchShifter {
@@ -410,7 +433,13 @@ impl PitchShifter {
             pitch_ratio: 1.0,
             sample_count: 0,
             window,
+            phase_alignment: PhaseAlignmentParams::default(),
         }
+    }
+
+    /// 位相アラインメントパラメータを設定
+    pub fn set_phase_alignment(&mut self, params: PhaseAlignmentParams) {
+        self.phase_alignment = params;
     }
 
     /// グレインサイズを設定（内部状態がリセットされる）
@@ -479,31 +508,48 @@ impl PitchShifter {
         self.input_buffer[idx0] * (1.0 - frac) + self.input_buffer[idx1] * frac
     }
 
-    /// 2つの位置間の相互相関を計算（サブサンプリングで高速化）
+    /// 2つの位置間の正規化相互相関を計算（サブサンプリングで高速化）
+    /// 戻り値は-1.0〜1.0の範囲（正規化されているため信号レベルに依存しない）
     fn compute_correlation(&self, pos1: f64, pos2: f64, length: usize) -> f32 {
         const SUBSAMPLE_STEP: usize = 4; // 4サンプルごとに計算
         let mut correlation = 0.0f32;
+        let mut energy1 = 0.0f32;
+        let mut energy2 = 0.0f32;
 
         for i in (0..length).step_by(SUBSAMPLE_STEP) {
             let sample1 = self.interpolate(pos1 + i as f64);
             let sample2 = self.interpolate(pos2 + i as f64);
             correlation += sample1 * sample2;
+            energy1 += sample1 * sample1;
+            energy2 += sample2 * sample2;
         }
 
-        correlation
+        // 正規化（ゼロ除算を防ぐ）
+        let denominator = (energy1 * energy2).sqrt();
+        if denominator > 1e-10 {
+            correlation / denominator
+        } else {
+            0.0
+        }
     }
 
-    /// 参照グレインとの相互相関が最大になる位置を探索
+    /// 参照グレインとの相互相関が最大になる位置を探索（WSOLA風アルゴリズム）
     fn find_best_alignment(&self, base_pos: f64, reference_pos: f64) -> f64 {
-        let search_range = (self.grain_size / 4) as i32; // 探索範囲
-        const SEARCH_STEP: i32 = 4; // 探索ステップ
-        let correlation_length = self.grain_size / 2; // 相関計算に使うサンプル数
+        // パラメータから探索範囲と相関長を計算
+        let search_range =
+            (self.grain_size as f32 * self.phase_alignment.search_range_ratio) as i32;
+        let correlation_length =
+            (self.grain_size as f32 * self.phase_alignment.correlation_length_ratio) as usize;
+
+        // 探索範囲に応じてステップサイズを調整
+        let coarse_step = (search_range / 64).max(4) as usize;
+        let fine_step = (coarse_step / 4).max(1);
 
         let mut best_pos = base_pos;
         let mut best_correlation = f32::MIN;
 
         // 粗い探索
-        for offset in (-search_range..=search_range).step_by(SEARCH_STEP as usize) {
+        for offset in (-search_range..=search_range).step_by(coarse_step) {
             let candidate_pos = base_pos + offset as f64;
             let correlation =
                 self.compute_correlation(candidate_pos, reference_pos, correlation_length);
@@ -514,9 +560,10 @@ impl PitchShifter {
             }
         }
 
-        // 細かい探索（粗い探索で見つかった位置の周辺）
+        // 細かい探索（粗い探索で見つかった位置の周辺をより細かく探索）
         let fine_base = best_pos;
-        for offset in -SEARCH_STEP..=SEARCH_STEP {
+        let fine_range = coarse_step as i32;
+        for offset in (-fine_range..=fine_range).step_by(fine_step) {
             let candidate_pos = fine_base + offset as f64;
             let correlation =
                 self.compute_correlation(candidate_pos, reference_pos, correlation_length);
@@ -550,7 +597,7 @@ impl PitchShifter {
         // 見つからなければ、除外以外で最大の位相を持つものを選択
         if best_idx.is_none() {
             for i in 0..self.num_grains {
-                if i == exclude_idx && self.grain_phase[i] > best_phase {
+                if i != exclude_idx && self.grain_phase[i] > best_phase {
                     best_phase = self.grain_phase[i];
                     best_idx = Some(i);
                 }
@@ -606,10 +653,14 @@ impl PitchShifter {
                     let base_pos =
                         (self.write_pos as f64 - offset).rem_euclid(self.buffer_size as f64);
 
-                    // 参照グレインを探して位相アラインメントを適用
-                    let aligned_pos = if let Some(ref_idx) = self.find_reference_grain(grain_idx) {
-                        let ref_pos = self.grain_read_pos[ref_idx];
-                        self.find_best_alignment(base_pos, ref_pos)
+                    // 参照グレインを探して位相アラインメントを適用（有効な場合のみ）
+                    let aligned_pos = if self.phase_alignment.enabled {
+                        if let Some(ref_idx) = self.find_reference_grain(grain_idx) {
+                            let ref_pos = self.grain_read_pos[ref_idx];
+                            self.find_best_alignment(base_pos, ref_pos)
+                        } else {
+                            base_pos
+                        }
                     } else {
                         base_pos
                     };

@@ -53,6 +53,9 @@ pub enum EffectNodeType {
     },
     PitchShift {
         semitones: f32,
+        phase_alignment_enabled: bool,
+        search_range_ratio: f32,
+        correlation_length_ratio: f32,
         pitch_shifter: Arc<Mutex<crate::dsp::PitchShifter>>,
     },
     GraphicEq {
@@ -282,10 +285,19 @@ impl EffectProcessor {
             }
             EffectNodeType::PitchShift {
                 semitones,
+                phase_alignment_enabled,
+                search_range_ratio,
+                correlation_length_ratio,
                 pitch_shifter,
             } => {
                 let mut shifter = pitch_shifter.lock();
                 shifter.set_semitones(*semitones);
+                // 位相アラインメントパラメータを更新
+                shifter.set_phase_alignment(crate::dsp::PhaseAlignmentParams {
+                    enabled: *phase_alignment_enabled,
+                    search_range_ratio: *search_range_ratio,
+                    correlation_length_ratio: *correlation_length_ratio,
+                });
                 let mut output = vec![0.0; input_a.len()];
                 shifter.process(&input_a, &mut output);
                 output

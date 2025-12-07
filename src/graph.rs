@@ -255,6 +255,9 @@ impl AudioGraphProcessor {
             AudioNode::PitchShift(pitch_node) => (
                 EffectNodeType::PitchShift {
                     semitones: pitch_node.semitones,
+                    phase_alignment_enabled: pitch_node.phase_alignment_enabled,
+                    search_range_ratio: pitch_node.search_range_ratio,
+                    correlation_length_ratio: pitch_node.correlation_length_ratio,
                     pitch_shifter: pitch_node.pitch_shifter.clone(),
                 },
                 1,

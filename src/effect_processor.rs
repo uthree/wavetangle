@@ -130,47 +130,34 @@ impl EffectProcessor {
 
                 // サンプルレートと処理間隔からブロックサイズを計算
                 // 48kHz, 2ms -> 96 samples
-                let block_size = ((sr * interval_ms as f32) / 1000.0).ceil() as usize;
+                let base_block_size = ((sr * interval_ms as f32) / 1000.0).ceil() as usize;
+                let max_block_size = base_block_size * 8; // 最大8倍まで
 
-                // すべてのソースバッファを収集（重複を除去）
-                let mut all_source_buffers: Vec<ChannelBuffer> = Vec::new();
+                // 各ノードを順番に処理（トポロジカル順序で渡されていると仮定）
+                // 各ノードごとに利用可能なデータ量をチェックして処理する
                 for node_info in &nodes_snapshot {
-                    for buf in &node_info.source_buffers {
-                        // Arc::ptr_eqで重複チェック
-                        if !all_source_buffers.iter().any(|b| Arc::ptr_eq(b, buf)) {
-                            all_source_buffers.push(buf.clone());
-                        }
-                    }
-                }
+                    // このノードのソースバッファの最小利用可能サンプル数を確認
+                    let min_available = if node_info.source_buffers.is_empty() {
+                        0
+                    } else {
+                        node_info
+                            .source_buffers
+                            .iter()
+                            .map(|buf| buf.lock().len())
+                            .min()
+                            .unwrap_or(0)
+                    };
 
-                // 最小利用可能サンプル数を確認
-                let min_available = all_source_buffers
-                    .iter()
-                    .map(|buf| buf.lock().len())
-                    .min()
-                    .unwrap_or(0);
+                    // 処理するサンプル数を決定
+                    let actual_block_size = min_available.min(max_block_size);
 
-                // 処理するサンプル数を決定
-                // バッファ蓄積を防ぐため、利用可能なデータをすべて処理する
-                // ただし、一度に処理する量に上限を設ける（処理時間の安定性のため）
-                let max_block_size = block_size * 8; // 最大8倍まで
-                let actual_block_size = min_available.min(max_block_size);
-
-                // データがある場合のみ処理
-                if actual_block_size > 0 {
-                    // ステップ1: ソースバッファからノードの入力バッファへデータをコピー
-                    for node_info in &nodes_snapshot {
+                    // データがある場合のみ処理
+                    if actual_block_size > 0 {
+                        // ソースバッファからノードの入力バッファへデータをコピー
                         Self::copy_source_to_input(node_info, actual_block_size);
-                    }
-
-                    // ステップ2: すべてのノードを処理
-                    for node_info in &nodes_snapshot {
+                        // ノードを処理
                         Self::process_node(node_info, actual_block_size, sr);
                     }
-
-                    // ステップ3: ソースバッファのデータ消費は不要
-                    // copy_source_to_inputでread_and_consumeを使用しているため、
-                    // 読み取りと同時に消費される
                 }
 
                 // 次の処理まで待機

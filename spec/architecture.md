@@ -30,11 +30,6 @@ src/
 ### ChannelBuffer (nodes.rs)
 `Arc<Mutex<RingBuffer>>` - チャンネルごとの共有バッファ。
 
-### NodeSize (nodes.rs)
-ノードの表示サイズを保持する構造体。
-- `width`: ノードの幅（デフォルト200.0、最小100.0〜最大600.0）
-- `height`: ノードの高さ（デフォルト150.0、最小80.0〜最大400.0）
-
 ### NodeBehavior trait (nodes.rs)
 すべてのノードが実装するトレイト。共通インターフェースを定義：
 - `title()`: ノードのタイトル
@@ -46,7 +41,6 @@ src/
 - `input_buffer()`: 指定入力ピンのバッファを取得（エフェクトノード用）
 - `channels()`, `set_channels()`: チャンネル数（ストリーム開始時に設定、ピン数も更新）
 - `is_active()`, `set_active()`: アクティブ状態
-- `node_size()`, `set_node_size()`: ノードの表示サイズ
 
 ### AudioNode (nodes.rs)
 オーディオグラフのノードを表すenum。個別の構造体をラップ：

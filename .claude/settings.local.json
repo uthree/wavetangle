@@ -11,8 +11,7 @@
       "Bash(cargo search:*)",
       "Bash(pkill:*)",
       "Bash(cargo run:*)",
-      "mcp__context7__resolve-library-id",
-      "Bash(cargo check:*)"
+      "mcp__context7__resolve-library-id"
     ],
     "deny": [],
     "ask": []

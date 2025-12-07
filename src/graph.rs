@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
-use egui_snarl::{InPinId, NodeId, OutPinId, Snarl};
+use egui_snarl::{InPinId, NodeId, Snarl};
 
-use crate::audio::AudioSystem;
+use crate::audio::{AudioSystem, OutputStreamId};
 use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
 use crate::nodes::{AudioNode, ChannelBuffer, NodeBehavior};
 
@@ -11,8 +10,8 @@ use crate::nodes::{AudioNode, ChannelBuffer, NodeBehavior};
 enum ActiveNodeState {
     /// 入力ノード
     Input,
-    /// 出力ノード（接続されているバッファの参照を保持）
-    Output(Vec<ChannelBuffer>),
+    /// 出力ノード（ストリームIDを保持）
+    Output { stream_id: OutputStreamId },
 }
 
 /// オーディオグラフの処理を管理
@@ -65,7 +64,7 @@ impl AudioGraphProcessor {
     fn update_spectrum(&self, snarl: &mut Snarl<AudioNode>) {
         use crate::nodes::FFT_SIZE;
 
-        for (node_id, node) in snarl.nodes_ids_mut() {
+        for (_node_id, node) in snarl.nodes_ids_mut() {
             match node {
                 AudioNode::AudioInput(input_node) => {
                     if input_node.is_active {
@@ -85,21 +84,17 @@ impl AudioGraphProcessor {
                 }
                 AudioNode::AudioOutput(output_node) => {
                     if output_node.is_active {
-                        // アクティブノードからソースバッファを取得してスペクトラム解析
+                        // 出力ノード自身のバッファからスペクトラム解析
                         // read()は状態を変更しないので、データを消費せずに読み取れる
-                        if let Some(ActiveNodeState::Output(source_buffers)) =
-                            self.active_nodes.get(&node_id)
-                        {
-                            if let Some(buffer) = source_buffers.first() {
-                                let samples = buffer.lock().read(FFT_SIZE);
+                        if let Some(buffer) = output_node.channel_buffers.first() {
+                            let samples = buffer.lock().read(FFT_SIZE);
 
-                                let mut analyzer = output_node.analyzer.lock();
-                                analyzer.push_samples(&samples);
-                                let spectrum_data = analyzer.compute_spectrum();
+                            let mut analyzer = output_node.analyzer.lock();
+                            analyzer.push_samples(&samples);
+                            let spectrum_data = analyzer.compute_spectrum();
 
-                                let mut spectrum = output_node.spectrum.lock();
-                                spectrum.copy_from_slice(&spectrum_data);
-                            }
+                            let mut spectrum = output_node.spectrum.lock();
+                            spectrum.copy_from_slice(&spectrum_data);
                         }
                     }
                 }
@@ -140,8 +135,31 @@ impl AudioGraphProcessor {
         for node_id in sorted_nodes {
             let node = &snarl[node_id];
 
+            // エフェクトノードの処理
             if let Some(info) = self.build_effect_node_info(snarl, node_id, node) {
                 effect_nodes.push(info);
+            }
+
+            // 出力ノードへのデータコピー処理を追加
+            if let AudioNode::AudioOutput(output_node) = node {
+                if output_node.is_active {
+                    // 各チャンネルに対してPassThroughエフェクトを作成
+                    for ch in 0..output_node.channels as usize {
+                        if let Some(source_buffer) = Self::get_source_buffer(snarl, node_id, ch) {
+                            // 出力ノードの入力バッファを使用
+                            if let Some(input_buffer) = output_node.input_buffer(ch) {
+                                if let Some(output_buffer) = output_node.channel_buffer(ch) {
+                                    effect_nodes.push(EffectNodeInfo {
+                                        node_type: EffectNodeType::PassThrough,
+                                        source_buffers: vec![source_buffer],
+                                        input_buffers: vec![input_buffer],
+                                        output_buffer,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -307,23 +325,13 @@ impl AudioGraphProcessor {
         })
     }
 
-    /// バッファ参照が同じかチェック（Arc::ptr_eq で比較）
-    fn buffers_equal(a: &[ChannelBuffer], b: &[ChannelBuffer]) -> bool {
-        if a.len() != b.len() {
-            return false;
-        }
-        a.iter().zip(b.iter()).all(|(a, b)| Arc::ptr_eq(a, b))
-    }
-
     /// ストリームの開始/停止を管理
     fn manage_streams(&mut self, snarl: &mut Snarl<AudioNode>, audio_system: &mut AudioSystem) {
         // まず、状態変更が必要なノードを収集
         let mut to_start_input: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
         let mut to_stop_input: Vec<NodeId> = Vec::new();
         let mut to_start_output: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
-        let mut to_stop_output: Vec<NodeId> = Vec::new();
-        // 接続変更によりストリームを再起動するノード
-        let mut to_restart_output: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
+        let mut to_stop_output: Vec<(NodeId, OutputStreamId)> = Vec::new();
 
         for (node_id, node) in snarl.node_ids() {
             match node {
@@ -340,28 +348,18 @@ impl AudioGraphProcessor {
                 }
                 AudioNode::AudioOutput(output_node) => {
                     if output_node.is_active && !self.active_nodes.contains_key(&node_id) {
-                        // 出力ノードの場合、接続されたソースのバッファを収集
-                        let buffers = self.collect_output_buffers(snarl, node_id, output_node);
+                        // 出力ノードは常に自身のバッファを使用
+                        // データはeffect_processorによってソースからコピーされる
+                        let buffers = output_node.channel_buffers.clone();
                         to_start_output.push((node_id, output_node.device_name.clone(), buffers));
-                    } else if !output_node.is_active && self.active_nodes.contains_key(&node_id) {
-                        to_stop_output.push(node_id);
-                    } else if output_node.is_active && self.active_nodes.contains_key(&node_id) {
-                        // アクティブな出力ノードの接続が変わったかチェック
-                        let current_buffers =
-                            self.collect_output_buffers(snarl, node_id, output_node);
-                        if let Some(ActiveNodeState::Output(stored_buffers)) =
+                    } else if !output_node.is_active {
+                        if let Some(ActiveNodeState::Output { stream_id }) =
                             self.active_nodes.get(&node_id)
                         {
-                            if !Self::buffers_equal(stored_buffers, &current_buffers) {
-                                // バッファが変わった場合、ストリームを再起動
-                                to_restart_output.push((
-                                    node_id,
-                                    output_node.device_name.clone(),
-                                    current_buffers,
-                                ));
-                            }
+                            to_stop_output.push((node_id, *stream_id));
                         }
                     }
+                    // 接続変更はeffect_processorで自動的に処理されるため、再起動不要
                 }
                 AudioNode::Gain(_)
                 | AudioNode::Add(_)
@@ -400,13 +398,13 @@ impl AudioGraphProcessor {
         }
 
         for (node_id, device_name, buffers) in to_start_output {
-            match audio_system.start_output(&device_name, buffers.clone()) {
-                Ok(channels) => {
+            match audio_system.start_output(&device_name, buffers) {
+                Ok((channels, stream_id)) => {
                     if let Some(node) = snarl.get_node_mut(node_id) {
                         node.set_channels(channels);
                     }
                     self.active_nodes
-                        .insert(node_id, ActiveNodeState::Output(buffers));
+                        .insert(node_id, ActiveNodeState::Output { stream_id });
                 }
                 Err(e) => {
                     eprintln!("Failed to start output: {}", e);
@@ -417,77 +415,28 @@ impl AudioGraphProcessor {
             }
         }
 
-        for node_id in to_stop_output {
-            audio_system.stop_output();
+        for (node_id, stream_id) in to_stop_output {
+            audio_system.stop_output(stream_id);
             self.active_nodes.remove(&node_id);
         }
-
-        // 接続変更により再起動が必要な出力ノード
-        for (node_id, device_name, buffers) in to_restart_output {
-            // 一旦停止してから再起動
-            audio_system.stop_output();
-            match audio_system.start_output(&device_name, buffers.clone()) {
-                Ok(channels) => {
-                    if let Some(node) = snarl.get_node_mut(node_id) {
-                        node.set_channels(channels);
-                    }
-                    self.active_nodes
-                        .insert(node_id, ActiveNodeState::Output(buffers));
-                }
-                Err(e) => {
-                    eprintln!("Failed to restart output: {}", e);
-                    self.active_nodes.remove(&node_id);
-                    if let Some(node) = snarl.get_node_mut(node_id) {
-                        node.set_active(false);
-                    }
-                }
-            }
-        }
     }
 
-    /// 出力ノードに接続されたソースのバッファを収集
-    fn collect_output_buffers(
-        &self,
+    /// 接続されたソースノードの出力バッファを取得
+    fn get_source_buffer(
         snarl: &Snarl<AudioNode>,
-        output_node_id: NodeId,
-        output_node: &crate::nodes::AudioOutputNode,
-    ) -> Vec<ChannelBuffer> {
-        let channel_count = output_node.channels as usize;
-        let mut buffers = Vec::with_capacity(channel_count);
+        node_id: NodeId,
+        input_idx: usize,
+    ) -> Option<ChannelBuffer> {
+        let in_pin = snarl.in_pin(InPinId {
+            node: node_id,
+            input: input_idx,
+        });
 
-        for ch in 0..channel_count {
-            let in_pin = snarl.in_pin(InPinId {
-                node: output_node_id,
-                input: ch,
-            });
-
-            // 接続チェーンをたどって最終的なバッファを取得
-            let buffer = if let Some(&remote) = in_pin.remotes.first() {
-                self.trace_buffer_chain(snarl, remote, &output_node.channel_buffers[ch])
-            } else {
-                output_node.channel_buffers[ch].clone()
-            };
-
-            buffers.push(buffer);
+        if let Some(&remote) = in_pin.remotes.first() {
+            snarl[remote.node].channel_buffer(remote.output)
+        } else {
+            None
         }
-
-        buffers
-    }
-
-    /// バッファチェーンをたどって最終的な出力バッファを取得
-    fn trace_buffer_chain(
-        &self,
-        snarl: &Snarl<AudioNode>,
-        out_pin_id: OutPinId,
-        fallback: &ChannelBuffer,
-    ) -> ChannelBuffer {
-        let source_node = &snarl[out_pin_id.node];
-
-        // エフェクトノードの場合、そのoutput_bufferを返す
-        // これによりエフェクト処理後のデータが出力に送られる
-        source_node
-            .channel_buffer(out_pin_id.output)
-            .unwrap_or_else(|| fallback.clone())
     }
 }
 

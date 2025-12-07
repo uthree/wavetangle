@@ -61,6 +61,8 @@ pub enum EffectNodeType {
     GraphicEq {
         graphic_eq: Arc<Mutex<crate::dsp::GraphicEq>>,
     },
+    /// パススルー - データをそのまま出力にコピー（出力ノードへのルーティング用）
+    PassThrough,
 }
 
 /// エフェクトプロセッサー
@@ -186,7 +188,18 @@ impl EffectProcessor {
 
     /// ソースバッファからノードの入力バッファへデータをコピー
     /// read_and_consumeでアトミックに読み取りと消費を行い、競合状態を防ぐ
+    /// PassThroughの場合は直接出力バッファにコピー（入力バッファを経由しない）
     fn copy_source_to_input(node_info: &EffectNodeInfo, block_size: usize) {
+        // PassThroughの場合は直接出力バッファにコピー
+        if matches!(node_info.node_type, EffectNodeType::PassThrough) {
+            if let Some(source) = node_info.source_buffers.first() {
+                let temp = source.lock().read_and_consume(block_size);
+                node_info.output_buffer.lock().push(&temp);
+            }
+            return;
+        }
+
+        // 通常のエフェクトノードの場合は入力バッファにコピー
         for (source, input) in node_info
             .source_buffers
             .iter()
@@ -201,6 +214,11 @@ impl EffectProcessor {
 
     /// 単一ノードを処理
     fn process_node(node_info: &EffectNodeInfo, block_size: usize, sample_rate: f32) {
+        // PassThroughの場合は処理をスキップ（copy_source_to_inputで直接コピー済み）
+        if matches!(node_info.node_type, EffectNodeType::PassThrough) {
+            return;
+        }
+
         // 入力データを読み取り（ノード自身の入力バッファから）
         let input_a = Self::read_from_input_buffer(&node_info.input_buffers, 0, block_size);
 
@@ -294,6 +312,10 @@ impl EffectProcessor {
                 let mut output = vec![0.0; input_a.len()];
                 eq.process(&input_a, &mut output);
                 output
+            }
+            EffectNodeType::PassThrough => {
+                // この分岐には到達しない（早期リターン済み）
+                unreachable!("PassThrough is handled in copy_source_to_input")
             }
         };
 

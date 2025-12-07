@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -27,11 +28,17 @@ impl Default for AudioConfig {
     }
 }
 
+/// 出力ストリームID
+pub type OutputStreamId = usize;
+
 /// オーディオシステム - デバイスの管理とストリームの制御
 pub struct AudioSystem {
     host: Host,
     input_stream: Option<Stream>,
-    output_stream: Option<Stream>,
+    /// 複数の出力ストリームを管理（ID -> Stream）
+    output_streams: HashMap<OutputStreamId, Stream>,
+    /// 次の出力ストリームID
+    next_output_id: OutputStreamId,
     config: AudioConfig,
 }
 
@@ -41,7 +48,8 @@ impl AudioSystem {
         Self {
             host,
             input_stream: None,
-            output_stream: None,
+            output_streams: HashMap::new(),
+            next_output_id: 0,
             config: AudioConfig::default(),
         }
     }
@@ -151,13 +159,13 @@ impl AudioSystem {
         Ok(channels)
     }
 
-    /// 出力ストリームを開始し、チャンネル数を返す
-    /// channel_buffers: チャンネルごとのリングバッファ
+    /// 出力ストリームを開始し、チャンネル数とストリームIDを返す
+    /// channel_buffers: 出力ノード自身のバッファ（データはeffect_processorでコピー済み）
     pub fn start_output(
         &mut self,
         device_name: &str,
         channel_buffers: Vec<ChannelBuffer>,
-    ) -> Result<u16, String> {
+    ) -> Result<(u16, OutputStreamId), String> {
         let device = self
             .get_output_device(device_name)
             .ok_or_else(|| format!("Output device '{}' not found", device_name))?;
@@ -188,7 +196,6 @@ impl AudioSystem {
                     }
 
                     // 各チャンネルからデータを読み取ってインターリーブ
-                    // read()は状態を変更しないため、同じバッファを複数回読んでも安全
                     for ch in 0..channels as usize {
                         let source_ch = ch.min(num_channels - 1);
                         let buf = channel_buffers[source_ch].lock();
@@ -212,8 +219,13 @@ impl AudioSystem {
         stream
             .play()
             .map_err(|e| format!("Failed to play output stream: {}", e))?;
-        self.output_stream = Some(stream);
-        Ok(channels)
+
+        // ストリームをHashMapに追加
+        let stream_id = self.next_output_id;
+        self.next_output_id += 1;
+        self.output_streams.insert(stream_id, stream);
+
+        Ok((channels, stream_id))
     }
 
     /// 入力ストリームを停止
@@ -221,9 +233,15 @@ impl AudioSystem {
         self.input_stream = None;
     }
 
-    /// 出力ストリームを停止
-    pub fn stop_output(&mut self) {
-        self.output_stream = None;
+    /// 指定したIDの出力ストリームを停止
+    pub fn stop_output(&mut self, stream_id: OutputStreamId) {
+        self.output_streams.remove(&stream_id);
+    }
+
+    /// すべての出力ストリームを停止
+    #[allow(dead_code)]
+    pub fn stop_all_outputs(&mut self) {
+        self.output_streams.clear();
     }
 }
 

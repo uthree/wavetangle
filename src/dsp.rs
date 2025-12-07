@@ -714,23 +714,24 @@ impl EqPoint {
 
 /// グラフィックEQのFFTサイズ
 pub const EQ_FFT_SIZE: usize = 2048;
-/// ホップサイズ（50%オーバーラップ）
-const EQ_HOP_SIZE: usize = EQ_FFT_SIZE / 2;
+/// ホップサイズ（75%オーバーラップ = FFT_SIZE / 4）
+const EQ_HOP_SIZE: usize = EQ_FFT_SIZE / 4;
 
 /// FFTベースのグラフィックイコライザー
+/// シンプルなオーバーラップ加算方式を採用
 pub struct GraphicEq {
     /// FFTプランナー
     fft: Arc<dyn rustfft::Fft<f32>>,
     /// IFFTプランナー
     ifft: Arc<dyn rustfft::Fft<f32>>,
-    /// 入力バッファ
-    input_buffer: Vec<f32>,
-    /// 出力バッファ
-    output_buffer: Vec<f32>,
-    /// 入力書き込み位置
-    input_pos: usize,
-    /// 出力読み取り位置
-    output_pos: usize,
+    /// 入力FIFO（FFT_SIZE分保持）
+    input_fifo: Vec<f32>,
+    /// オーバーラップ加算バッファ（FFT_SIZE分）
+    overlap_buffer: Vec<f32>,
+    /// 出力FIFO（HOP_SIZE分保持）
+    output_fifo: Vec<f32>,
+    /// 出力FIFO読み取り位置
+    output_fifo_pos: usize,
     /// FFT作業用バッファ
     fft_buffer: Vec<Complex<f32>>,
     /// 窓関数
@@ -739,10 +740,10 @@ pub struct GraphicEq {
     freq_gains: Vec<f32>,
     /// サンプルレート
     sample_rate: f32,
-    /// 処理済みサンプル数
-    samples_since_fft: usize,
     /// 入力スペクトラム（マグニチュード）
     input_spectrum: Vec<f32>,
+    /// 初期化済みフラグ（最初のブロックを処理したか）
+    initialized: bool,
 }
 
 impl GraphicEq {
@@ -765,16 +766,16 @@ impl GraphicEq {
         Self {
             fft,
             ifft,
-            input_buffer: vec![0.0; EQ_FFT_SIZE * 2],
-            output_buffer: vec![0.0; EQ_FFT_SIZE * 2],
-            input_pos: 0,
-            output_pos: 0,
+            input_fifo: vec![0.0; EQ_FFT_SIZE],
+            overlap_buffer: vec![0.0; EQ_FFT_SIZE],
+            output_fifo: vec![0.0; EQ_HOP_SIZE],
+            output_fifo_pos: 0,
             fft_buffer: vec![Complex::new(0.0, 0.0); EQ_FFT_SIZE],
             window,
             freq_gains,
             sample_rate,
-            samples_since_fft: 0,
             input_spectrum: vec![0.0; EQ_FFT_SIZE / 2],
+            initialized: false,
         }
     }
 
@@ -796,10 +797,14 @@ impl GraphicEq {
         }
     }
 
-    /// ポイント間を線形補間してゲインを取得
+    /// ポイント間をCatmull-Romスプライン補間してゲインを取得
     fn interpolate_gain(points: &[EqPoint], freq: f32) -> f32 {
         if points.is_empty() {
             return 0.0;
+        }
+
+        if points.len() == 1 {
+            return points[0].gain_db;
         }
 
         // 周波数でソートされていると仮定
@@ -810,48 +815,85 @@ impl GraphicEq {
             return points[points.len() - 1].gain_db;
         }
 
-        // 2点間を線形補間（対数周波数スケール）
+        // 対数周波数スケールでの位置を計算
+        let log_freq = freq.ln();
+
+        // 補間区間を探す
         for i in 0..points.len() - 1 {
             if freq >= points[i].freq && freq <= points[i + 1].freq {
-                let log_freq = freq.ln();
                 let log_f0 = points[i].freq.ln();
                 let log_f1 = points[i + 1].freq.ln();
                 let t = (log_freq - log_f0) / (log_f1 - log_f0);
-                return points[i].gain_db + t * (points[i + 1].gain_db - points[i].gain_db);
+
+                // Catmull-Romスプライン用の4点を取得
+                // 端点では隣接点を複製して使用
+                let p0 = if i > 0 {
+                    points[i - 1].gain_db
+                } else {
+                    // 端点: 傾きを維持するように外挿
+                    2.0 * points[i].gain_db - points[i + 1].gain_db
+                };
+                let p1 = points[i].gain_db;
+                let p2 = points[i + 1].gain_db;
+                let p3 = if i + 2 < points.len() {
+                    points[i + 2].gain_db
+                } else {
+                    // 端点: 傾きを維持するように外挿
+                    2.0 * points[i + 1].gain_db - points[i].gain_db
+                };
+
+                return Self::catmull_rom(p0, p1, p2, p3, t);
             }
         }
 
         0.0
     }
 
+    /// Catmull-Romスプライン補間
+    /// p0, p1, p2, p3: 4つの制御点
+    /// t: p1とp2の間のパラメータ (0.0 ~ 1.0)
+    fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
+        let t2 = t * t;
+        let t3 = t2 * t;
+
+        // Catmull-Rom係数 (tau = 0.5)
+        // p(t) = 0.5 * ((2*p1) + (-p0 + p2)*t + (2*p0 - 5*p1 + 4*p2 - p3)*t² + (-p0 + 3*p1 - 3*p2 + p3)*t³)
+        0.5 * ((2.0 * p1)
+            + (-p0 + p2) * t
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+    }
+
     /// オーディオを処理
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
         for (i, &sample) in input.iter().enumerate() {
-            // 入力バッファに書き込み
-            self.input_buffer[self.input_pos] = sample;
-            self.input_pos = (self.input_pos + 1) % (EQ_FFT_SIZE * 2);
-            self.samples_since_fft += 1;
-
-            // ホップサイズ分のサンプルが溜まったらFFT処理
-            if self.samples_since_fft >= EQ_HOP_SIZE {
-                self.process_fft_block();
-                self.samples_since_fft = 0;
+            // 出力FIFOから読み取り
+            if self.initialized {
+                output[i] = self.output_fifo[self.output_fifo_pos];
+            } else {
+                output[i] = 0.0;
             }
 
-            // 出力バッファから読み取り
-            output[i] = self.output_buffer[self.output_pos];
-            self.output_buffer[self.output_pos] = 0.0; // クリア（オーバーラップ加算用）
-            self.output_pos = (self.output_pos + 1) % (EQ_FFT_SIZE * 2);
+            // 入力FIFOをシフトして新しいサンプルを追加
+            self.input_fifo.copy_within(1.., 0);
+            self.input_fifo[EQ_FFT_SIZE - 1] = sample;
+
+            self.output_fifo_pos += 1;
+
+            // HOP_SIZE分溜まったらFFTブロック処理
+            if self.output_fifo_pos >= EQ_HOP_SIZE {
+                self.process_fft_block();
+                self.output_fifo_pos = 0;
+                self.initialized = true;
+            }
         }
     }
 
     /// FFTブロック処理
     fn process_fft_block(&mut self) {
         // 入力を窓関数付きでFFTバッファにコピー
-        let start = (self.input_pos + EQ_FFT_SIZE * 2 - EQ_FFT_SIZE) % (EQ_FFT_SIZE * 2);
         for i in 0..EQ_FFT_SIZE {
-            let idx = (start + i) % (EQ_FFT_SIZE * 2);
-            self.fft_buffer[i] = Complex::new(self.input_buffer[idx] * self.window[i], 0.0);
+            self.fft_buffer[i] = Complex::new(self.input_fifo[i] * self.window[i], 0.0);
         }
 
         // FFT
@@ -867,7 +909,7 @@ impl GraphicEq {
         for bin in 0..bin_count {
             let gain = self.freq_gains[bin];
             self.fft_buffer[bin] *= gain;
-            // 対称成分
+            // 対称成分（ナイキスト以下）
             if bin > 0 && bin < EQ_FFT_SIZE / 2 {
                 self.fft_buffer[EQ_FFT_SIZE - bin] *= gain;
             }
@@ -876,23 +918,32 @@ impl GraphicEq {
         // IFFT
         self.ifft.process(&mut self.fft_buffer);
 
-        // 正規化とオーバーラップ加算
-        let norm = 1.0 / EQ_FFT_SIZE as f32;
-        let out_start = self.output_pos;
+        // IFFT正規化(1/N) × 窓補正(2/3 for 75% overlap Hann²)
+        let norm = 2.0 / (3.0 * EQ_FFT_SIZE as f32);
+
+        // オーバーラップ加算バッファに窓関数を適用して加算
         for i in 0..EQ_FFT_SIZE {
-            let idx = (out_start + i) % (EQ_FFT_SIZE * 2);
-            self.output_buffer[idx] += self.fft_buffer[i].re * norm * self.window[i];
+            self.overlap_buffer[i] += self.fft_buffer[i].re * norm * self.window[i];
         }
+
+        // オーバーラップバッファの先頭HOP_SIZE分を出力FIFOにコピー
+        self.output_fifo
+            .copy_from_slice(&self.overlap_buffer[..EQ_HOP_SIZE]);
+
+        // オーバーラップバッファをHOP_SIZE分シフト
+        self.overlap_buffer.copy_within(EQ_HOP_SIZE.., 0);
+        // シフトで空いた末尾をゼロクリア
+        self.overlap_buffer[EQ_FFT_SIZE - EQ_HOP_SIZE..].fill(0.0);
     }
 
     /// リセット
     #[allow(dead_code)]
     pub fn reset(&mut self) {
-        self.input_buffer.fill(0.0);
-        self.output_buffer.fill(0.0);
-        self.input_pos = 0;
-        self.output_pos = 0;
-        self.samples_since_fft = 0;
+        self.input_fifo.fill(0.0);
+        self.overlap_buffer.fill(0.0);
+        self.output_fifo.fill(0.0);
+        self.output_fifo_pos = 0;
+        self.initialized = false;
     }
 
     /// 入力スペクトラムを取得

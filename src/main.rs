@@ -3,7 +3,6 @@ mod dsp;
 mod effect_processor;
 mod graph;
 mod nodes;
-mod pipeline;
 mod project;
 mod viewer;
 

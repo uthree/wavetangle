@@ -10,6 +10,16 @@ use rustfft::FftPlanner;
 
 use crate::nodes::{FilterType, FFT_SIZE};
 
+/// Hann窓を生成する共通関数
+pub fn create_hann_window(size: usize) -> Vec<f32> {
+    (0..size)
+        .map(|i| {
+            let t = i as f32 / size as f32;
+            0.5 * (1.0 - (2.0 * PI * t).cos())
+        })
+        .collect()
+}
+
 /// Biquadフィルター係数
 #[derive(Clone, Debug)]
 pub struct BiquadCoeffs {
@@ -248,13 +258,7 @@ impl SpectrumAnalyzer {
         let planner = FftPlanner::new();
         let half_size = FFT_SIZE / 2;
 
-        // Hann窓を生成
-        let window: Vec<f32> = (0..FFT_SIZE)
-            .map(|i| {
-                let t = i as f32 / FFT_SIZE as f32;
-                0.5 * (1.0 - (2.0 * PI * t).cos())
-            })
-            .collect();
+        let window = create_hann_window(FFT_SIZE);
 
         Self {
             planner,
@@ -376,13 +380,7 @@ impl PitchShifter {
         let min_buffer_size = grain_size * num_grains * 4;
         let buffer_size = buffer_size.max(min_buffer_size);
 
-        // ハン窓を生成
-        let window: Vec<f32> = (0..grain_size)
-            .map(|i| {
-                let t = i as f32 / grain_size as f32;
-                0.5 * (1.0 - (2.0 * PI * t).cos())
-            })
-            .collect();
+        let window = create_hann_window(grain_size);
 
         // グレインを均等に配置（位相）
         let mut grain_phase = vec![0.0; num_grains];
@@ -415,24 +413,6 @@ impl PitchShifter {
         }
     }
 
-    /// グレインサイズを取得
-    #[allow(dead_code)]
-    pub fn grain_size(&self) -> usize {
-        self.grain_size
-    }
-
-    /// グレイン数を取得
-    #[allow(dead_code)]
-    pub fn num_grains(&self) -> usize {
-        self.num_grains
-    }
-
-    /// バッファサイズを取得
-    #[allow(dead_code)]
-    pub fn buffer_size(&self) -> usize {
-        self.buffer_size
-    }
-
     /// グレインサイズを設定（内部状態がリセットされる）
     pub fn set_grain_size(&mut self, grain_size: usize) {
         let grain_size = grain_size.clamp(128, 8192);
@@ -449,16 +429,6 @@ impl PitchShifter {
         }
     }
 
-    /// バッファサイズを設定（内部状態がリセットされる）
-    #[allow(dead_code)]
-    pub fn set_buffer_size(&mut self, buffer_size: usize) {
-        let min_buffer_size = self.grain_size * self.num_grains * 4;
-        let buffer_size = buffer_size.max(min_buffer_size);
-        if buffer_size != self.buffer_size {
-            self.rebuild_with_params(self.grain_size, self.num_grains, buffer_size);
-        }
-    }
-
     /// パラメータを変更して内部バッファを再構築
     fn rebuild_with_params(&mut self, grain_size: usize, num_grains: usize, buffer_size: usize) {
         let min_buffer_size = grain_size * num_grains * 4;
@@ -471,13 +441,7 @@ impl PitchShifter {
         // バッファを再割り当て
         self.input_buffer = vec![0.0; buffer_size];
 
-        // 窓関数を再生成
-        self.window = (0..grain_size)
-            .map(|i| {
-                let t = i as f32 / grain_size as f32;
-                0.5 * (1.0 - (2.0 * PI * t).cos())
-            })
-            .collect();
+        self.window = create_hann_window(grain_size);
 
         // グレイン配列を再割り当て
         self.grain_phase = vec![0.0; num_grains];
@@ -500,11 +464,6 @@ impl PitchShifter {
     }
 
     /// ピッチシフト量を設定
-    #[allow(dead_code)]
-    pub fn set_pitch_ratio(&mut self, ratio: f32) {
-        self.pitch_ratio = ratio.clamp(0.5, 2.0);
-    }
-
     /// 半音単位でピッチを設定（-12 = 1オクターブ下、+12 = 1オクターブ上）
     pub fn set_semitones(&mut self, semitones: f32) {
         self.pitch_ratio = 2.0_f32.powf(semitones / 12.0);
@@ -752,13 +711,7 @@ impl GraphicEq {
         let fft = planner.plan_fft_forward(EQ_FFT_SIZE);
         let ifft = planner.plan_fft_inverse(EQ_FFT_SIZE);
 
-        // ハン窓を生成
-        let window: Vec<f32> = (0..EQ_FFT_SIZE)
-            .map(|i| {
-                let t = i as f32 / EQ_FFT_SIZE as f32;
-                0.5 * (1.0 - (2.0 * PI * t).cos())
-            })
-            .collect();
+        let window = create_hann_window(EQ_FFT_SIZE);
 
         // デフォルトは全帯域フラット（ゲイン1.0）
         let freq_gains = vec![1.0; EQ_FFT_SIZE / 2 + 1];
@@ -934,16 +887,6 @@ impl GraphicEq {
         self.overlap_buffer.copy_within(EQ_HOP_SIZE.., 0);
         // シフトで空いた末尾をゼロクリア
         self.overlap_buffer[EQ_FFT_SIZE - EQ_HOP_SIZE..].fill(0.0);
-    }
-
-    /// リセット
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.input_fifo.fill(0.0);
-        self.overlap_buffer.fill(0.0);
-        self.output_fifo.fill(0.0);
-        self.output_fifo_pos = 0;
-        self.initialized = false;
     }
 
     /// 入力スペクトラムを取得

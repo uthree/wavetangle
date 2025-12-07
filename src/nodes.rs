@@ -80,18 +80,6 @@ impl AudioBuffer {
     pub fn len(&self) -> usize {
         self.data.len()
     }
-
-    /// バッファが空かどうか
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    /// バッファをクリア
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.data.clear();
-    }
 }
 
 /// チャンネルバッファ - 1チャンネル分のオーディオバッファ
@@ -108,23 +96,11 @@ pub enum PinType {
     Audio,
 }
 
-/// ノードの種類（UIでの表示用）
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[allow(dead_code)]
-pub enum NodeCategory {
-    Input,
-    Output,
-    Effect,
-}
-
 /// すべてのノードが実装するトレイト
 #[allow(dead_code)]
 pub trait NodeBehavior {
     /// ノードのタイトル
     fn title(&self) -> &str;
-
-    /// ノードのカテゴリ
-    fn category(&self) -> NodeCategory;
 
     /// 入力ピンの数
     fn input_count(&self) -> usize;
@@ -166,6 +142,39 @@ pub trait NodeBehavior {
 /// デフォルトのリングバッファサイズ（サンプル数）
 /// 4096 = 約85ms @ 48kHz（レイテンシと安定性のバランス）
 pub const DEFAULT_RING_BUFFER_SIZE: usize = 4096;
+
+/// マルチチャンネルオーディオのチャンネル名
+/// サラウンド5.1chまで対応
+const CHANNEL_NAMES: &[&str] = &["L", "R", "C", "LFE", "SL", "SR"];
+
+/// チャンネルインデックスからチャンネル名を取得
+fn channel_name(index: usize) -> Option<&'static str> {
+    CHANNEL_NAMES.get(index).copied()
+}
+
+/// チャンネルバッファのサイズを調整
+/// 変更があった場合はtrueを返す
+fn resize_channel_buffers(
+    channel_buffers: &mut Vec<ChannelBuffer>,
+    current_channels: u16,
+    new_channels: u16,
+) -> bool {
+    if current_channels == new_channels {
+        return false;
+    }
+
+    let old_len = channel_buffers.len();
+    let new_len = new_channels as usize;
+
+    if new_len > old_len {
+        for _ in old_len..new_len {
+            channel_buffers.push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
+        }
+    } else {
+        channel_buffers.truncate(new_len);
+    }
+    true
+}
 
 // ============================================================================
 // Audio Input Node
@@ -218,36 +227,16 @@ impl AudioInputNode {
     }
 
     /// チャンネル数に合わせてバッファを再作成
-    /// 注意: 既存のバッファを保持し、必要に応じて追加/削除のみ行う
     pub fn resize_buffers(&mut self, channels: u16) {
-        if self.channels == channels {
-            return; // チャンネル数が同じなら何もしない
+        if resize_channel_buffers(&mut self.channel_buffers, self.channels, channels) {
+            self.channels = channels;
         }
-
-        let old_len = self.channel_buffers.len();
-        let new_len = channels as usize;
-
-        if new_len > old_len {
-            // チャンネルを追加
-            for _ in old_len..new_len {
-                self.channel_buffers
-                    .push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
-            }
-        } else {
-            // チャンネルを削除
-            self.channel_buffers.truncate(new_len);
-        }
-        self.channels = channels;
     }
 }
 
 impl NodeBehavior for AudioInputNode {
     fn title(&self) -> &str {
         "Audio Input"
-    }
-
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Input
     }
 
     fn input_count(&self) -> usize {
@@ -275,15 +264,7 @@ impl NodeBehavior for AudioInputNode {
     }
 
     fn output_pin_name(&self, index: usize) -> Option<&str> {
-        match index {
-            0 => Some("L"),
-            1 => Some("R"),
-            2 => Some("C"),
-            3 => Some("LFE"),
-            4 => Some("SL"),
-            5 => Some("SR"),
-            _ => None,
-        }
+        channel_name(index)
     }
 
     fn input_buffer(&self, _index: usize) -> Option<ChannelBuffer> {
@@ -362,36 +343,16 @@ impl AudioOutputNode {
     }
 
     /// チャンネル数に合わせてバッファを再作成
-    /// 注意: 既存のバッファを保持し、必要に応じて追加/削除のみ行う
     pub fn resize_buffers(&mut self, channels: u16) {
-        if self.channels == channels {
-            return; // チャンネル数が同じなら何もしない
+        if resize_channel_buffers(&mut self.channel_buffers, self.channels, channels) {
+            self.channels = channels;
         }
-
-        let old_len = self.channel_buffers.len();
-        let new_len = channels as usize;
-
-        if new_len > old_len {
-            // チャンネルを追加
-            for _ in old_len..new_len {
-                self.channel_buffers
-                    .push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
-            }
-        } else {
-            // チャンネルを削除
-            self.channel_buffers.truncate(new_len);
-        }
-        self.channels = channels;
     }
 }
 
 impl NodeBehavior for AudioOutputNode {
     fn title(&self) -> &str {
         "Audio Output"
-    }
-
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Output
     }
 
     fn input_count(&self) -> usize {
@@ -415,15 +376,7 @@ impl NodeBehavior for AudioOutputNode {
     }
 
     fn input_pin_name(&self, index: usize) -> Option<&str> {
-        match index {
-            0 => Some("L"),
-            1 => Some("R"),
-            2 => Some("C"),
-            3 => Some("LFE"),
-            4 => Some("SL"),
-            5 => Some("SR"),
-            _ => None,
-        }
+        channel_name(index)
     }
 
     fn output_pin_name(&self, _index: usize) -> Option<&str> {
@@ -493,10 +446,6 @@ impl Default for GainNode {
 impl NodeBehavior for GainNode {
     fn title(&self) -> &str {
         "Gain"
-    }
-
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
     }
 
     fn input_count(&self) -> usize {
@@ -605,10 +554,6 @@ impl NodeBehavior for AddNode {
         "Add"
     }
 
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
-    }
-
     fn input_count(&self) -> usize {
         2
     }
@@ -711,10 +656,6 @@ impl Default for MultiplyNode {
 impl NodeBehavior for MultiplyNode {
     fn title(&self) -> &str {
         "Multiply"
-    }
-
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
     }
 
     fn input_count(&self) -> usize {
@@ -853,10 +794,6 @@ impl NodeBehavior for FilterNode {
         "Filter"
     }
 
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
-    }
-
     fn input_count(&self) -> usize {
         1
     }
@@ -989,10 +926,6 @@ impl NodeBehavior for SpectrumAnalyzerNode {
         "Spectrum"
     }
 
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
-    }
-
     fn input_count(&self) -> usize {
         1
     }
@@ -1114,10 +1047,6 @@ impl Default for CompressorNode {
 impl NodeBehavior for CompressorNode {
     fn title(&self) -> &str {
         "Compressor"
-    }
-
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
     }
 
     fn input_count(&self) -> usize {
@@ -1251,10 +1180,6 @@ impl Default for PitchShiftNode {
 impl NodeBehavior for PitchShiftNode {
     fn title(&self) -> &str {
         "Pitch Shift"
-    }
-
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
     }
 
     fn input_count(&self) -> usize {
@@ -1402,10 +1327,6 @@ impl NodeBehavior for GraphicEqNode {
         "Graphic EQ"
     }
 
-    fn category(&self) -> NodeCategory {
-        NodeCategory::Effect
-    }
-
     fn input_count(&self) -> usize {
         1
     }
@@ -1515,10 +1436,6 @@ impl NodeBehavior for AudioNode {
         delegate_node_behavior!(self, title)
     }
 
-    fn category(&self) -> NodeCategory {
-        delegate_node_behavior!(self, category)
-    }
-
     fn input_count(&self) -> usize {
         delegate_node_behavior!(self, input_count)
     }
@@ -1599,41 +1516,5 @@ impl AudioNode {
     /// AudioOutputノードを作成
     pub fn new_audio_output(device_name: String) -> Self {
         Self::AudioOutput(AudioOutputNode::new(device_name))
-    }
-
-    /// AudioInputノードへの参照を取得
-    #[allow(dead_code)]
-    pub fn as_audio_input(&self) -> Option<&AudioInputNode> {
-        match self {
-            AudioNode::AudioInput(node) => Some(node),
-            _ => None,
-        }
-    }
-
-    /// AudioInputノードへの可変参照を取得
-    #[allow(dead_code)]
-    pub fn as_audio_input_mut(&mut self) -> Option<&mut AudioInputNode> {
-        match self {
-            AudioNode::AudioInput(node) => Some(node),
-            _ => None,
-        }
-    }
-
-    /// AudioOutputノードへの参照を取得
-    #[allow(dead_code)]
-    pub fn as_audio_output(&self) -> Option<&AudioOutputNode> {
-        match self {
-            AudioNode::AudioOutput(node) => Some(node),
-            _ => None,
-        }
-    }
-
-    /// AudioOutputノードへの可変参照を取得
-    #[allow(dead_code)]
-    pub fn as_audio_output_mut(&mut self) -> Option<&mut AudioOutputNode> {
-        match self {
-            AudioNode::AudioOutput(node) => Some(node),
-            _ => None,
-        }
     }
 }

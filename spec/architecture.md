@@ -15,7 +15,6 @@ src/
 ├── dsp.rs               # DSPアルゴリズム（フィルター、コンプレッサー、FFT）
 ├── effect_processor.rs  # エフェクト処理専用スレッド
 ├── graph.rs             # オーディオグラフの処理ロジック
-├── pipeline.rs          # パイプライン並列処理（ロックフリーSPSCバッファ）
 ├── project.rs           # プロジェクトの保存・読み込み
 └── viewer.rs            # egui-snarlのSnarlViewer実装
 ```
@@ -41,7 +40,6 @@ src/
 ### NodeBehavior trait (nodes.rs)
 すべてのノードが実装するトレイト。共通インターフェースを定義：
 - `title()`: ノードのタイトル
-- `category()`: ノードのカテゴリ（Input/Output/Effect）
 - `input_count()`, `output_count()`: ピン数（チャンネル数に連動）
 - `input_pin_type()`, `output_pin_type()`: ピンタイプ
 - `input_pin_name()`, `output_pin_name()`: ピン名（L, R, C, LFE, SL, SR）
@@ -49,6 +47,11 @@ src/
 - `input_buffer()`: 指定入力ピンのバッファを取得（エフェクトノード用）
 - `channels()`, `set_channels()`: チャンネル数（ストリーム開始時に設定、ピン数も更新）
 - `is_active()`, `set_active()`: アクティブ状態
+
+### ヘルパー関数 (nodes.rs)
+コード重複を削減するための共通関数：
+- `channel_name()`: チャンネルインデックスからチャンネル名を取得（L, R, C, LFE, SL, SR）
+- `resize_channel_buffers()`: チャンネルバッファのサイズを調整
 
 ### AudioNode (nodes.rs)
 オーディオグラフのノードを表すenum。個別の構造体をラップ：
@@ -112,14 +115,6 @@ egui-snarlのSnarlViewerトレイトを実装。
 - ピン接続のロジック（同じPinType同士のみ）
 - コンテキストメニュー（ノード追加・削除）
 
-### Pipeline (pipeline.rs)
-パイプライン並列処理のための基盤。将来的にエフェクトノードをパイプライン処理する。
-- `SpscProducer`/`SpscConsumer`: ロックフリーSPSCリングバッファ（ringbufクレート使用）
-- `ProcessingNode`トレイト: スレッド上でオーディオ処理を行うノードのインターフェース
-- `NodeThread`: 処理スレッドの管理（開始、停止、状態確認）
-- `PipelineBuilder`: ノードをチェーンしてパイプラインを構築
-- `Pipeline`: 実行中のパイプライン管理
-
 ## データフロー
 
 1. `AudioInput`ノードがデバイスからインターリーブされた音声データを取得
@@ -139,7 +134,12 @@ egui-snarlのSnarlViewerトレイトを実装。
 
 ## DSP処理 (dsp.rs)
 
-エフェクトノードのオーディオ処理アルゴリズムを実装：
+エフェクトノードのオーディオ処理アルゴリズムを実装。
+
+### ヘルパー関数
+- `create_hann_window()`: 指定サイズのHann窓を生成（FFT、ピッチシフト、EQで共通使用）
+
+### Biquadフィルター
 - `BiquadCoeffs`: Biquadフィルター係数（LowPass/HighPass/BandPass）
 - `BiquadState`: フィルター状態（1サンプル処理）
 - `CompressorParams`: コンプレッサーパラメータ
@@ -184,8 +184,6 @@ egui-snarlのSnarlViewerトレイトを実装。
 - **egui_plot**: プロット表示（スペクトラムアナライザー用）
 - **cpal**: クロスプラットフォームオーディオI/O
 - **parking_lot**: 高性能mutex実装
-- **ringbuf**: ロックフリーSPSCリングバッファ（パイプライン並列処理用）
-- **ndarray**: 将来的な信号処理用（現在未使用）
 - **rustfft**: FFT実装（スペクトラムアナライザー用）
 - **serde/serde_json**: シリアライズ・デシリアライズ
 - **rfd**: ネイティブファイルダイアログ

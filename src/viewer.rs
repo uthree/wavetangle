@@ -589,6 +589,7 @@ impl AudioGraphViewer {
         ui: &mut Ui,
     ) {
         ui.vertical(|ui| {
+            ui.set_max_width(150.0);
             ui.label("Semitones:");
             ui.add(egui::Slider::new(&mut node.semitones, -12.0..=12.0).suffix(" st"));
 

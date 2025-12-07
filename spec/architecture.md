@@ -37,6 +37,12 @@ src/
 ### ChannelBuffer (nodes.rs)
 `Arc<Mutex<AudioBuffer>>` - チャンネルごとの共有バッファ。
 
+### NodeUIContext (nodes.rs)
+UI描画時に必要なコンテキストを保持する構造体：
+- `input_devices`: 入力デバイス名のリスト
+- `output_devices`: 出力デバイス名のリスト
+- `node_id`: ウィジェットの一意識別用ノードID
+
 ### NodeBehavior trait (nodes.rs)
 すべてのノードが実装するトレイト。共通インターフェースを定義：
 - `title()`: ノードのタイトル
@@ -47,6 +53,7 @@ src/
 - `input_buffer()`: 指定入力ピンのバッファを取得（エフェクトノード用）
 - `channels()`, `set_channels()`: チャンネル数（ストリーム開始時に設定、ピン数も更新）
 - `is_active()`, `set_active()`: アクティブ状態
+- `show_body()`: ノードボディのUI描画（NodeUIContextを受け取る）
 
 ### ヘルパー関数 (nodes.rs)
 コード重複を削減するための共通関数：
@@ -67,12 +74,6 @@ src/
 - `GraphicEq(GraphicEqNode)`: グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
 
 `delegate_node_behavior!`マクロでtraitメソッドをデリゲート。
-新しいノードタイプを追加する際は：
-1. 構造体を定義（`channel_buffers: Vec<ChannelBuffer>`または`input_buffer`/`output_buffer`を含む）
-2. `NodeBehavior`トレイトを実装
-3. `AudioNode` enumにバリアントを追加
-4. マクロにバリアントを追加
-5. `viewer.rs`の`show_body`と`show_graph_menu`を更新
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。
@@ -113,10 +114,17 @@ cpalを使用したオーディオデバイス管理システム。
 
 ### AudioGraphViewer (viewer.rs)
 egui-snarlのSnarlViewerトレイトを実装。
-- ノードのUI表示
+- ノードのUI表示（各ノードの`show_body()`にデリゲート）
 - 動的なピン数（チャンネル数に応じて変化）
 - ピン接続のロジック（同じPinType同士のみ）
 - コンテキストメニュー（ノード追加・削除）
+
+新しいノードタイプを追加する際は：
+1. 構造体を定義（`channel_buffers: Vec<ChannelBuffer>`または`input_buffer`/`output_buffer`を含む）
+2. `NodeBehavior`トレイトを実装（`show_body()`でUI描画も含む）
+3. `AudioNode` enumにバリアントを追加
+4. マクロにバリアントを追加
+5. `viewer.rs`の`show_graph_menu`を更新（ノード追加メニュー）
 
 ## データフロー
 

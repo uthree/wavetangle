@@ -1,2 +1,5 @@
 # wavetangle
-graph-based realtime audio processing tool
+リアルタイムオーディオ処理ツール
+
+## スクリーンショット
+!["screenshot"]("./assets/images/wavetangle_screenshot.png")

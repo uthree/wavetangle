@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Host, SampleRate, Stream, StreamConfig};
 
@@ -175,17 +177,44 @@ impl AudioSystem {
 
                     let frame_count = data.len() / channels as usize;
 
-                    // 各チャンネルからデータを読み取ってインターリーブ
+                    // 同じバッファを複数チャンネルで共有する場合に対応
+                    // まず、ユニークなバッファを特定し、各バッファから1回だけ読み込む
+                    let mut unique_buffers: Vec<(usize, ChannelBuffer)> = Vec::new();
+                    let mut channel_to_unique: Vec<usize> = Vec::with_capacity(channels as usize);
+
                     for ch in 0..channels as usize {
                         let source_ch = ch.min(num_channels - 1);
-                        let mut buf = channel_buffers[source_ch].lock();
+                        let buf = &channel_buffers[source_ch];
 
-                        // 一時バッファに読み取り
+                        // 既存のユニークバッファと比較
+                        let existing_idx = unique_buffers
+                            .iter()
+                            .position(|(_, existing)| Arc::ptr_eq(buf, existing));
+
+                        if let Some(idx) = existing_idx {
+                            // 既存のバッファを参照
+                            channel_to_unique.push(idx);
+                        } else {
+                            // 新しいユニークバッファとして追加
+                            channel_to_unique.push(unique_buffers.len());
+                            unique_buffers.push((source_ch, buf.clone()));
+                        }
+                    }
+
+                    // ユニークバッファごとに1回だけ読み込み
+                    let mut read_data: Vec<Vec<f32>> = Vec::with_capacity(unique_buffers.len());
+                    for (_, buf) in &unique_buffers {
                         let mut temp = vec![0.0f32; frame_count];
-                        buf.read(&mut temp);
+                        buf.lock().read(&mut temp);
+                        read_data.push(temp);
+                    }
 
-                        // インターリーブして出力
-                        for (frame, &sample) in temp.iter().enumerate() {
+                    // 各チャンネルに対応するデータをインターリーブして出力
+                    for ch in 0..channels as usize {
+                        let unique_idx = channel_to_unique[ch];
+                        let samples = &read_data[unique_idx];
+
+                        for (frame, &sample) in samples.iter().enumerate() {
                             data[frame * channels as usize + ch] = sample;
                         }
                     }

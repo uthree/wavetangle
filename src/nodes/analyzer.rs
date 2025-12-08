@@ -47,15 +47,6 @@ impl SpectrumAnalyzerNode {
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
         }
     }
-
-    /// スペクトラムを更新
-    #[allow(dead_code)]
-    pub fn update_spectrum(&self) {
-        let mut analyzer = self.analyzer.lock();
-        let spectrum_data = analyzer.compute_spectrum();
-        let mut spectrum = self.spectrum.lock();
-        spectrum.copy_from_slice(&spectrum_data);
-    }
 }
 
 impl Default for SpectrumAnalyzerNode {

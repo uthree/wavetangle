@@ -249,12 +249,6 @@ impl AudioSystem {
     pub fn stop_output(&mut self, stream_id: OutputStreamId) {
         self.output_streams.remove(&stream_id);
     }
-
-    /// すべての出力ストリームを停止
-    #[allow(dead_code)]
-    pub fn stop_all_outputs(&mut self) {
-        self.output_streams.clear();
-    }
 }
 
 impl Default for AudioSystem {

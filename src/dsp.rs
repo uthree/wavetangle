@@ -142,15 +142,6 @@ impl BiquadState {
 
         output
     }
-
-    /// リセット
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.x1 = 0.0;
-        self.x2 = 0.0;
-        self.y1 = 0.0;
-        self.y2 = 0.0;
-    }
 }
 
 /// コンプレッサーパラメータ
@@ -224,12 +215,6 @@ impl CompressorState {
         let output_gain = 10.0_f32.powf((gain_reduction_db + makeup_db) / 20.0);
 
         input * output_gain
-    }
-
-    /// リセット
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.envelope = -120.0;
     }
 }
 
@@ -307,14 +292,6 @@ impl SpectrumAnalyzer {
         }
 
         self.smoothed.clone()
-    }
-
-    /// リセット
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.input_buffer.fill(0.0);
-        self.smoothed.fill(0.0);
-        self.write_pos = 0;
     }
 }
 
@@ -674,26 +651,6 @@ impl PitchShifter {
         }
 
         self.sample_count += input.len();
-    }
-
-    /// リセット
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.input_buffer.fill(0.0);
-        self.write_pos = self.buffer_size / 2;
-        self.sample_count = 0;
-
-        // グレインを均等に再配置
-        for (i, phase) in self.grain_phase.iter_mut().enumerate() {
-            *phase = i as f64 / self.num_grains as f64;
-        }
-
-        // グレインの読み取り位置を書き込み位置の手前に設定
-        let grain_spacing = self.grain_size / self.num_grains;
-        for (i, read_pos) in self.grain_read_pos.iter_mut().enumerate() {
-            let offset = self.grain_size + (i * grain_spacing);
-            *read_pos = (self.write_pos as f64 - offset as f64).rem_euclid(self.buffer_size as f64);
-        }
     }
 }
 

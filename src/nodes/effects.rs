@@ -185,9 +185,6 @@ pub struct FilterNode {
     pub is_active: bool,
     /// Biquadフィルター状態
     pub biquad_state: Arc<Mutex<crate::dsp::BiquadState>>,
-    /// 現在のフィルター係数（キャッシュ用）
-    #[allow(dead_code)]
-    pub biquad_coeffs: Arc<Mutex<Option<crate::dsp::BiquadCoeffs>>>,
 }
 
 impl FilterNode {
@@ -200,20 +197,7 @@ impl FilterNode {
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             biquad_state: Arc::new(Mutex::new(crate::dsp::BiquadState::new())),
-            biquad_coeffs: Arc::new(Mutex::new(None)),
         }
-    }
-
-    /// フィルター係数を更新
-    #[allow(dead_code)]
-    pub fn update_coeffs(&self, sample_rate: f32) {
-        let coeffs = crate::dsp::BiquadCoeffs::from_filter_type(
-            self.filter_type,
-            sample_rate,
-            self.cutoff,
-            self.resonance,
-        );
-        *self.biquad_coeffs.lock() = Some(coeffs);
     }
 }
 
@@ -299,9 +283,6 @@ pub struct CompressorNode {
     pub is_active: bool,
     /// コンプレッサー状態
     pub compressor_state: Arc<Mutex<crate::dsp::CompressorState>>,
-    /// 現在のゲインリダクション (dB) - メーター表示用
-    #[allow(dead_code)]
-    pub gain_reduction: Arc<Mutex<f32>>,
 }
 
 impl CompressorNode {
@@ -316,7 +297,6 @@ impl CompressorNode {
             output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
             is_active: false,
             compressor_state: Arc::new(Mutex::new(crate::dsp::CompressorState::new())),
-            gain_reduction: Arc::new(Mutex::new(0.0)),
         }
     }
 }
@@ -604,15 +584,6 @@ impl GraphicEqNode {
             show_spectrum: true,
             spectrum: Arc::new(Mutex::new(vec![0.0; EQ_FFT_SIZE / 2])),
         }
-    }
-
-    /// EQカーブを更新（UIから呼ばれる）
-    #[allow(dead_code)]
-    pub fn update_eq_curve(&mut self) {
-        // ポイントを周波数でソート
-        self.eq_points
-            .sort_by(|a, b| a.freq.partial_cmp(&b.freq).unwrap());
-        self.graphic_eq.lock().update_curve(&self.eq_points);
     }
 }
 

@@ -58,8 +58,86 @@ pub(crate) fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
     )
 }
 
-/// スペクトラムを折れ線グラフで表示（dBスケール、周波数目盛付き）
-pub(crate) fn show_spectrum_line(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>>) {
+// ============================================================================
+// SpectrumDisplay - スペクトラム表示コンポーネント
+// ============================================================================
+
+/// スペクトラム表示コンポーネント
+/// IOノードのスペクトラム表示機能をカプセル化する
+pub struct SpectrumDisplay {
+    /// スペクトラム表示を有効にするか
+    pub enabled: bool,
+    /// スペクトラムデータ（FFTサイズ/2のf32配列）
+    pub spectrum: Arc<Mutex<Vec<f32>>>,
+    /// スペクトラムアナライザー（オプション、IOノードで使用）
+    pub analyzer: Option<Arc<Mutex<crate::dsp::SpectrumAnalyzer>>>,
+}
+
+impl SpectrumDisplay {
+    /// アナライザー付きのスペクトラム表示を作成（IOノード用）
+    pub fn with_analyzer(fft_size: usize) -> Self {
+        Self {
+            enabled: true,
+            spectrum: Arc::new(Mutex::new(vec![0.0; fft_size / 2])),
+            analyzer: Some(Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new()))),
+        }
+    }
+
+    /// アナライザーなしのスペクトラム表示を作成（GraphicEqNode用）
+    #[allow(dead_code)]
+    pub fn without_analyzer(fft_size: usize) -> Self {
+        Self {
+            enabled: true,
+            spectrum: Arc::new(Mutex::new(vec![0.0; fft_size / 2])),
+            analyzer: None,
+        }
+    }
+
+    /// サンプルデータからスペクトラムを更新（アナライザーが必要）
+    pub fn update_from_samples(&self, samples: &[f32]) {
+        if let Some(ref analyzer) = self.analyzer {
+            let mut analyzer = analyzer.lock();
+            analyzer.push_samples(samples);
+            let spectrum_data = analyzer.compute_spectrum();
+
+            let mut spectrum = self.spectrum.lock();
+            if spectrum.len() == spectrum_data.len() {
+                spectrum.copy_from_slice(&spectrum_data);
+            }
+        }
+    }
+
+    /// 外部スペクトラムデータで更新（GraphicEqNode用）
+    #[allow(dead_code)]
+    pub fn update_from_data(&self, data: &[f32]) {
+        let mut spectrum = self.spectrum.lock();
+        if spectrum.len() == data.len() {
+            spectrum.copy_from_slice(data);
+        }
+    }
+
+    /// 折れ線グラフでスペクトラムを表示
+    pub fn show_line(&self, ui: &mut Ui, plot_id: &str) {
+        show_spectrum_line_impl(ui, plot_id, &self.spectrum);
+    }
+}
+
+impl Clone for SpectrumDisplay {
+    fn clone(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            spectrum: self.spectrum.clone(),
+            // アナライザーはクローン時に新しいインスタンスを作成（状態を共有しない）
+            analyzer: self
+                .analyzer
+                .as_ref()
+                .map(|_| Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new()))),
+        }
+    }
+}
+
+/// スペクトラム表示の内部実装
+fn show_spectrum_line_impl(ui: &mut Ui, plot_id: &str, spectrum: &Arc<Mutex<Vec<f32>>>) {
     use egui_plot::{Line, Plot, PlotPoints};
 
     let spectrum_data = spectrum.lock();
@@ -233,6 +311,108 @@ pub fn new_channel_buffer(capacity: usize) -> ChannelBuffer {
     Arc::new(Mutex::new(AudioBuffer::new(capacity)))
 }
 
+// ============================================================================
+// NodeBuffers - ノードのバッファ管理を統一
+// ============================================================================
+
+/// ノードのバッファ管理を統一する構造体
+/// 入出力ノードと中間ノードで共通のインターフェースを提供する
+#[derive(Clone)]
+pub struct NodeBuffers {
+    /// 入力バッファ（入力ピンごとに1つ）
+    pub input_buffers: Vec<ChannelBuffer>,
+    /// 出力バッファ（出力ピンごとに1つ）
+    pub output_buffers: Vec<ChannelBuffer>,
+}
+
+impl NodeBuffers {
+    /// 1入力1出力ノード用（GainNode, FilterNode等）
+    pub fn single_io() -> Self {
+        Self {
+            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
+            output_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
+        }
+    }
+
+    /// N入力1出力ノード用（AddNode, MultiplyNode等）
+    pub fn multi_input(input_count: usize) -> Self {
+        Self {
+            input_buffers: (0..input_count)
+                .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
+                .collect(),
+            output_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
+        }
+    }
+
+    /// マルチチャンネル入力専用（AudioOutputNode用）
+    pub fn input_only(channels: u16) -> Self {
+        let channels = channels.max(1);
+        Self {
+            input_buffers: (0..channels)
+                .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
+                .collect(),
+            output_buffers: Vec::new(),
+        }
+    }
+
+    /// マルチチャンネル出力専用（AudioInputNode用）
+    pub fn output_only(channels: u16) -> Self {
+        let channels = channels.max(1);
+        Self {
+            input_buffers: Vec::new(),
+            output_buffers: (0..channels)
+                .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
+                .collect(),
+        }
+    }
+
+    /// 入力バッファ数
+    pub fn input_count(&self) -> usize {
+        self.input_buffers.len()
+    }
+
+    /// 出力バッファ数
+    pub fn output_count(&self) -> usize {
+        self.output_buffers.len()
+    }
+
+    /// 入力バッファを取得
+    pub fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.input_buffers.get(index).cloned()
+    }
+
+    /// 出力バッファを取得
+    pub fn output_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+        self.output_buffers.get(index).cloned()
+    }
+
+    /// 入力バッファ数のリサイズ
+    pub fn resize_inputs(&mut self, count: usize) {
+        let old_len = self.input_buffers.len();
+        if count > old_len {
+            for _ in old_len..count {
+                self.input_buffers
+                    .push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
+            }
+        } else {
+            self.input_buffers.truncate(count);
+        }
+    }
+
+    /// 出力バッファ数のリサイズ
+    pub fn resize_outputs(&mut self, count: usize) {
+        let old_len = self.output_buffers.len();
+        if count > old_len {
+            for _ in old_len..count {
+                self.output_buffers
+                    .push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
+            }
+        } else {
+            self.output_buffers.truncate(count);
+        }
+    }
+}
+
 /// ノードのピンタイプ
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PinType {
@@ -383,6 +563,82 @@ macro_rules! impl_as_any {
 // マクロを各サブモジュールで使えるようにエクスポート
 pub(crate) use impl_as_any;
 
+// ============================================================================
+// NodeBuffers対応マクロ
+// ============================================================================
+
+/// NodeBuffersを使用するノード用のAudioInputPort実装マクロ
+/// ピン名のリストを受け取り、その数に応じた入力ポートを実装する
+macro_rules! impl_input_port_nb {
+    ($ty:ty, [$($name:literal),+ $(,)?]) => {
+        impl AudioInputPort for $ty {
+            fn input_count(&self) -> usize {
+                const NAMES: &[&str] = &[$($name),+];
+                NAMES.len()
+            }
+
+            fn input_pin_type(&self, index: usize) -> Option<PinType> {
+                const NAMES: &[&str] = &[$($name),+];
+                if index < NAMES.len() {
+                    Some(PinType::Audio)
+                } else {
+                    None
+                }
+            }
+
+            fn input_pin_name(&self, index: usize) -> Option<&'static str> {
+                const NAMES: &[&str] = &[$($name),+];
+                NAMES.get(index).copied()
+            }
+
+            fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
+                self.buffers.input_buffer(index)
+            }
+        }
+    };
+}
+pub(crate) use impl_input_port_nb;
+
+/// NodeBuffersを使用するノード用のAudioOutputPort実装マクロ（1出力）
+macro_rules! impl_single_output_port_nb {
+    ($ty:ty) => {
+        impl AudioOutputPort for $ty {
+            fn output_count(&self) -> usize {
+                1
+            }
+
+            fn output_pin_type(&self, index: usize) -> Option<PinType> {
+                if index == 0 {
+                    Some(PinType::Audio)
+                } else {
+                    None
+                }
+            }
+
+            fn output_pin_name(&self, index: usize) -> Option<&str> {
+                if index == 0 {
+                    Some("Out")
+                } else {
+                    None
+                }
+            }
+
+            fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
+                self.buffers.output_buffer(channel)
+            }
+
+            fn channels(&self) -> u16 {
+                1
+            }
+
+            fn set_channels(&mut self, _channels: u16) {
+                // 1入力1出力エフェクトは常に1チャンネル
+            }
+        }
+    };
+}
+pub(crate) use impl_single_output_port_nb;
+
 /// マルチチャンネルオーディオのチャンネル名
 /// サラウンド5.1chまで対応
 const CHANNEL_NAMES: &[&str] = &["L", "R", "C", "LFE", "SL", "SR"];
@@ -390,30 +646,6 @@ const CHANNEL_NAMES: &[&str] = &["L", "R", "C", "LFE", "SL", "SR"];
 /// チャンネルインデックスからチャンネル名を取得
 pub(crate) fn channel_name(index: usize) -> Option<&'static str> {
     CHANNEL_NAMES.get(index).copied()
-}
-
-/// チャンネルバッファのサイズを調整
-/// 変更があった場合はtrueを返す
-pub(crate) fn resize_channel_buffers(
-    channel_buffers: &mut Vec<ChannelBuffer>,
-    current_channels: u16,
-    new_channels: u16,
-) -> bool {
-    if current_channels == new_channels {
-        return false;
-    }
-
-    let old_len = channel_buffers.len();
-    let new_len = new_channels as usize;
-
-    if new_len > old_len {
-        for _ in old_len..new_len {
-            channel_buffers.push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
-        }
-    } else {
-        channel_buffers.truncate(new_len);
-    }
-    true
 }
 
 // ============================================================================
@@ -481,26 +713,26 @@ mod tests {
     fn test_audio_input_node_channels() {
         // 1チャンネル（モノラル）
         let node = AudioInputNode::new("test_device".to_string(), 1);
-        assert_eq!(node.channels, 1);
-        assert_eq!(node.channel_buffers.len(), 1);
+        assert_eq!(node.channels(), 1);
+        assert_eq!(node.buffers.output_buffers.len(), 1);
         assert_eq!(node.output_count(), 1);
 
         // 2チャンネル（ステレオ）
         let node = AudioInputNode::new("test_device".to_string(), 2);
-        assert_eq!(node.channels, 2);
-        assert_eq!(node.channel_buffers.len(), 2);
+        assert_eq!(node.channels(), 2);
+        assert_eq!(node.buffers.output_buffers.len(), 2);
         assert_eq!(node.output_count(), 2);
 
         // 6チャンネル（5.1ch）
         let node = AudioInputNode::new("test_device".to_string(), 6);
-        assert_eq!(node.channels, 6);
-        assert_eq!(node.channel_buffers.len(), 6);
+        assert_eq!(node.channels(), 6);
+        assert_eq!(node.buffers.output_buffers.len(), 6);
         assert_eq!(node.output_count(), 6);
 
         // 0チャンネルは1に補正される
         let node = AudioInputNode::new("test_device".to_string(), 0);
-        assert_eq!(node.channels, 1);
-        assert_eq!(node.channel_buffers.len(), 1);
+        assert_eq!(node.channels(), 1);
+        assert_eq!(node.buffers.output_buffers.len(), 1);
         assert_eq!(node.output_count(), 1);
     }
 
@@ -508,20 +740,20 @@ mod tests {
     fn test_audio_output_node_channels() {
         // 1チャンネル（モノラル）
         let node = AudioOutputNode::new("test_device".to_string(), 1);
-        assert_eq!(node.channels, 1);
-        assert_eq!(node.channel_buffers.len(), 1);
+        assert_eq!(node.channels(), 1);
+        assert_eq!(node.buffers.input_buffers.len(), 1);
         assert_eq!(node.input_count(), 1);
 
         // 2チャンネル（ステレオ）
         let node = AudioOutputNode::new("test_device".to_string(), 2);
-        assert_eq!(node.channels, 2);
-        assert_eq!(node.channel_buffers.len(), 2);
+        assert_eq!(node.channels(), 2);
+        assert_eq!(node.buffers.input_buffers.len(), 2);
         assert_eq!(node.input_count(), 2);
 
         // 0チャンネルは1に補正される
         let node = AudioOutputNode::new("test_device".to_string(), 0);
-        assert_eq!(node.channels, 1);
-        assert_eq!(node.channel_buffers.len(), 1);
+        assert_eq!(node.channels(), 1);
+        assert_eq!(node.buffers.input_buffers.len(), 1);
         assert_eq!(node.input_count(), 1);
     }
 
@@ -532,14 +764,14 @@ mod tests {
 
         // チャンネル数を増やす
         node.resize_buffers(4);
-        assert_eq!(node.channels, 4);
-        assert_eq!(node.channel_buffers.len(), 4);
+        assert_eq!(node.channels(), 4);
+        assert_eq!(node.buffers.output_buffers.len(), 4);
         assert_eq!(node.output_count(), 4);
 
         // チャンネル数を減らす
         node.resize_buffers(1);
-        assert_eq!(node.channels, 1);
-        assert_eq!(node.channel_buffers.len(), 1);
+        assert_eq!(node.channels(), 1);
+        assert_eq!(node.buffers.output_buffers.len(), 1);
         assert_eq!(node.output_count(), 1);
     }
 
@@ -550,14 +782,14 @@ mod tests {
 
         // チャンネル数を増やす
         node.resize_buffers(4);
-        assert_eq!(node.channels, 4);
-        assert_eq!(node.channel_buffers.len(), 4);
+        assert_eq!(node.channels(), 4);
+        assert_eq!(node.buffers.input_buffers.len(), 4);
         assert_eq!(node.input_count(), 4);
 
         // チャンネル数を減らす
         node.resize_buffers(1);
-        assert_eq!(node.channels, 1);
-        assert_eq!(node.channel_buffers.len(), 1);
+        assert_eq!(node.channels(), 1);
+        assert_eq!(node.buffers.input_buffers.len(), 1);
         assert_eq!(node.input_count(), 1);
     }
 

@@ -180,16 +180,16 @@ impl ProjectFile {
                     let n = node.as_any().downcast_ref::<AudioInputNode>().unwrap();
                     SavedNode::AudioInput {
                         device_name: n.device_name.clone(),
-                        channels: n.channels,
-                        show_spectrum: n.show_spectrum,
+                        channels: n.channels(),
+                        show_spectrum: n.spectrum_display.enabled,
                     }
                 }
                 NodeType::AudioOutput => {
                     let n = node.as_any().downcast_ref::<AudioOutputNode>().unwrap();
                     SavedNode::AudioOutput {
                         device_name: n.device_name.clone(),
-                        channels: n.channels,
-                        show_spectrum: n.show_spectrum,
+                        channels: n.channels(),
+                        show_spectrum: n.spectrum_display.enabled,
                     }
                 }
                 NodeType::Gain => {
@@ -291,7 +291,7 @@ impl ProjectFile {
                     show_spectrum,
                 } => {
                     let mut node = AudioInputNode::new(device_name.clone(), *channels);
-                    node.show_spectrum = *show_spectrum;
+                    node.spectrum_display.enabled = *show_spectrum;
                     Box::new(node)
                 }
                 SavedNode::AudioOutput {
@@ -300,7 +300,7 @@ impl ProjectFile {
                     show_spectrum,
                 } => {
                     let mut node = AudioOutputNode::new(device_name.clone(), *channels);
-                    node.show_spectrum = *show_spectrum;
+                    node.spectrum_display.enabled = *show_spectrum;
                     Box::new(node)
                 }
                 SavedNode::Gain { gain } => {
@@ -523,12 +523,12 @@ mod tests {
             match node.node_type() {
                 NodeType::AudioInput => {
                     let n = node.as_any().downcast_ref::<AudioInputNode>().unwrap();
-                    assert_eq!(n.channels, 1);
+                    assert_eq!(n.channels(), 1);
                     assert_eq!(n.output_count(), 1);
                 }
                 NodeType::AudioOutput => {
                     let n = node.as_any().downcast_ref::<AudioOutputNode>().unwrap();
-                    assert_eq!(n.channels, 2);
+                    assert_eq!(n.channels(), 2);
                     assert_eq!(n.input_count(), 2);
                 }
                 _ => panic!("Unexpected node type"),

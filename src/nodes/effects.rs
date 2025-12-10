@@ -5,84 +5,10 @@ use egui_plot::{Line, Plot, PlotPoints, Points};
 use parking_lot::Mutex;
 
 use super::{
-    impl_as_any, interpolate_eq_gain, new_channel_buffer, AudioInputPort, AudioOutputPort,
-    ChannelBuffer, NodeBase, NodeType, NodeUI, NodeUIContext, PinType, DEFAULT_RING_BUFFER_SIZE,
-    EQ_FFT_SIZE,
+    impl_as_any, impl_input_port_nb, impl_single_output_port_nb, interpolate_eq_gain,
+    AudioInputPort, AudioOutputPort, ChannelBuffer, NodeBase, NodeBuffers, NodeType, NodeUI,
+    NodeUIContext, PinType, EQ_FFT_SIZE,
 };
-
-/// 1入力1出力エフェクトノード用のAudioInputPort実装マクロ
-macro_rules! impl_single_input_port {
-    ($ty:ty) => {
-        impl AudioInputPort for $ty {
-            fn input_count(&self) -> usize {
-                1
-            }
-
-            fn input_pin_type(&self, index: usize) -> Option<PinType> {
-                if index == 0 {
-                    Some(PinType::Audio)
-                } else {
-                    None
-                }
-            }
-
-            fn input_pin_name(&self, index: usize) -> Option<&str> {
-                if index == 0 {
-                    Some("In")
-                } else {
-                    None
-                }
-            }
-
-            fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-                self.input_buffers.get(index).cloned()
-            }
-        }
-    };
-}
-
-/// 1入力1出力エフェクトノード用のAudioOutputPort実装マクロ
-macro_rules! impl_single_output_port {
-    ($ty:ty) => {
-        impl AudioOutputPort for $ty {
-            fn output_count(&self) -> usize {
-                1
-            }
-
-            fn output_pin_type(&self, index: usize) -> Option<PinType> {
-                if index == 0 {
-                    Some(PinType::Audio)
-                } else {
-                    None
-                }
-            }
-
-            fn output_pin_name(&self, index: usize) -> Option<&str> {
-                if index == 0 {
-                    Some("Out")
-                } else {
-                    None
-                }
-            }
-
-            fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-                if channel == 0 {
-                    Some(self.output_buffer.clone())
-                } else {
-                    None
-                }
-            }
-
-            fn channels(&self) -> u16 {
-                1
-            }
-
-            fn set_channels(&mut self, _channels: u16) {
-                // 1入力1出力エフェクトは常に1チャンネル
-            }
-        }
-    };
-}
 
 // ============================================================================
 // Gain Node (Effect)
@@ -93,10 +19,8 @@ macro_rules! impl_single_output_port {
 pub struct GainNode {
     /// ゲイン値（倍率）
     pub gain: f32,
-    /// 入力バッファ（各入力ピンに対応）
-    pub input_buffers: Vec<ChannelBuffer>,
-    /// 出力バッファ
-    pub output_buffer: ChannelBuffer,
+    /// バッファ管理
+    pub buffers: NodeBuffers,
     /// アクティブ状態
     pub is_active: bool,
 }
@@ -105,8 +29,7 @@ impl GainNode {
     pub fn new() -> Self {
         Self {
             gain: 1.0,
-            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
-            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            buffers: NodeBuffers::single_io(),
             is_active: false,
         }
     }
@@ -118,7 +41,7 @@ impl Default for GainNode {
     }
 }
 
-// GainNodeのトレイト実装（マクロを使用）
+// GainNodeのトレイト実装（NodeBuffers対応マクロを使用）
 impl NodeBase for GainNode {
     fn node_type(&self) -> NodeType {
         NodeType::Gain
@@ -131,8 +54,8 @@ impl NodeBase for GainNode {
     impl_as_any!();
 }
 
-impl_single_input_port!(GainNode);
-impl_single_output_port!(GainNode);
+impl_input_port_nb!(GainNode, ["In"]);
+impl_single_output_port_nb!(GainNode);
 
 impl NodeUI for GainNode {
     fn is_active(&self) -> bool {
@@ -179,9 +102,8 @@ pub struct FilterNode {
     pub cutoff: f32,
     /// レゾナンス (Q値)
     pub resonance: f32,
-    /// 入力バッファ（1入力）
-    pub input_buffers: Vec<ChannelBuffer>,
-    pub output_buffer: ChannelBuffer,
+    /// バッファ管理
+    pub buffers: NodeBuffers,
     pub is_active: bool,
     /// Biquadフィルター状態
     pub biquad_state: Arc<Mutex<crate::dsp::BiquadState>>,
@@ -193,8 +115,7 @@ impl FilterNode {
             filter_type: FilterType::Low,
             cutoff: 1000.0,
             resonance: 0.707,
-            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
-            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            buffers: NodeBuffers::single_io(),
             is_active: false,
             biquad_state: Arc::new(Mutex::new(crate::dsp::BiquadState::new())),
         }
@@ -207,7 +128,7 @@ impl Default for FilterNode {
     }
 }
 
-// FilterNodeのトレイト実装（マクロを使用）
+// FilterNodeのトレイト実装（NodeBuffers対応マクロを使用）
 impl NodeBase for FilterNode {
     fn node_type(&self) -> NodeType {
         NodeType::Filter
@@ -220,8 +141,8 @@ impl NodeBase for FilterNode {
     impl_as_any!();
 }
 
-impl_single_input_port!(FilterNode);
-impl_single_output_port!(FilterNode);
+impl_input_port_nb!(FilterNode, ["In"]);
+impl_single_output_port_nb!(FilterNode);
 
 impl NodeUI for FilterNode {
     fn is_active(&self) -> bool {
@@ -277,9 +198,8 @@ pub struct CompressorNode {
     pub release: f32,
     /// メイクアップゲイン (dB)
     pub makeup_gain: f32,
-    /// 入力バッファ（1入力）
-    pub input_buffers: Vec<ChannelBuffer>,
-    pub output_buffer: ChannelBuffer,
+    /// バッファ管理
+    pub buffers: NodeBuffers,
     pub is_active: bool,
     /// コンプレッサー状態
     pub compressor_state: Arc<Mutex<crate::dsp::CompressorState>>,
@@ -293,8 +213,7 @@ impl CompressorNode {
             attack: 10.0,
             release: 100.0,
             makeup_gain: 0.0,
-            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
-            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            buffers: NodeBuffers::single_io(),
             is_active: false,
             compressor_state: Arc::new(Mutex::new(crate::dsp::CompressorState::new())),
         }
@@ -307,7 +226,7 @@ impl Default for CompressorNode {
     }
 }
 
-// CompressorNodeのトレイト実装（マクロを使用）
+// CompressorNodeのトレイト実装（NodeBuffers対応マクロを使用）
 impl NodeBase for CompressorNode {
     fn node_type(&self) -> NodeType {
         NodeType::Compressor
@@ -320,8 +239,8 @@ impl NodeBase for CompressorNode {
     impl_as_any!();
 }
 
-impl_single_input_port!(CompressorNode);
-impl_single_output_port!(CompressorNode);
+impl_input_port_nb!(CompressorNode, ["In"]);
+impl_single_output_port_nb!(CompressorNode);
 
 impl NodeUI for CompressorNode {
     fn is_active(&self) -> bool {
@@ -370,10 +289,8 @@ pub struct PitchShiftNode {
     pub search_range_ratio: f32,
     /// 位相アラインメントの相関長（グレインサイズに対する割合、0.1〜1.0）
     pub correlation_length_ratio: f32,
-    /// 入力バッファ（1入力）
-    pub input_buffers: Vec<ChannelBuffer>,
-    /// 出力バッファ
-    pub output_buffer: ChannelBuffer,
+    /// バッファ管理
+    pub buffers: NodeBuffers,
     /// アクティブ状態
     pub is_active: bool,
     /// ピッチシフター（スレッドセーフ）
@@ -389,8 +306,7 @@ impl Clone for PitchShiftNode {
             phase_alignment_enabled: self.phase_alignment_enabled,
             search_range_ratio: self.search_range_ratio,
             correlation_length_ratio: self.correlation_length_ratio,
-            input_buffers: self.input_buffers.clone(),
-            output_buffer: self.output_buffer.clone(),
+            buffers: self.buffers.clone(),
             is_active: self.is_active,
             pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::with_params(
                 44100.0,
@@ -412,8 +328,7 @@ impl PitchShiftNode {
             phase_alignment_enabled: default_params.enabled,
             search_range_ratio: default_params.search_range_ratio,
             correlation_length_ratio: default_params.correlation_length_ratio,
-            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)], // 1入力
-            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            buffers: NodeBuffers::single_io(),
             is_active: false,
             pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::new(44100.0))),
         }
@@ -426,7 +341,7 @@ impl Default for PitchShiftNode {
     }
 }
 
-// PitchShiftNodeのトレイト実装（マクロを使用）
+// PitchShiftNodeのトレイト実装（NodeBuffers対応マクロを使用）
 impl NodeBase for PitchShiftNode {
     fn node_type(&self) -> NodeType {
         NodeType::PitchShift
@@ -439,8 +354,8 @@ impl NodeBase for PitchShiftNode {
     impl_as_any!();
 }
 
-impl_single_input_port!(PitchShiftNode);
-impl_single_output_port!(PitchShiftNode);
+impl_input_port_nb!(PitchShiftNode, ["In"]);
+impl_single_output_port_nb!(PitchShiftNode);
 
 impl NodeUI for PitchShiftNode {
     fn is_active(&self) -> bool {
@@ -537,10 +452,8 @@ impl NodeUI for PitchShiftNode {
 pub struct GraphicEqNode {
     /// EQカーブのコントロールポイント
     pub eq_points: Vec<crate::dsp::EqPoint>,
-    /// 入力バッファ（1入力）
-    pub input_buffers: Vec<ChannelBuffer>,
-    /// 出力バッファ
-    pub output_buffer: ChannelBuffer,
+    /// バッファ管理
+    pub buffers: NodeBuffers,
     /// アクティブ状態
     pub is_active: bool,
     /// グラフィックEQプロセッサー（スレッドセーフ）
@@ -555,8 +468,7 @@ impl Clone for GraphicEqNode {
     fn clone(&self) -> Self {
         Self {
             eq_points: self.eq_points.clone(),
-            input_buffers: self.input_buffers.clone(),
-            output_buffer: self.output_buffer.clone(),
+            buffers: self.buffers.clone(),
             is_active: self.is_active,
             graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
             show_spectrum: self.show_spectrum,
@@ -577,8 +489,7 @@ impl GraphicEqNode {
         ];
         Self {
             eq_points,
-            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
-            output_buffer: new_channel_buffer(DEFAULT_RING_BUFFER_SIZE),
+            buffers: NodeBuffers::single_io(),
             is_active: false,
             graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
             show_spectrum: true,
@@ -593,7 +504,7 @@ impl Default for GraphicEqNode {
     }
 }
 
-// GraphicEqNodeのトレイト実装（マクロを使用）
+// GraphicEqNodeのトレイト実装（NodeBuffers対応マクロを使用）
 impl NodeBase for GraphicEqNode {
     fn node_type(&self) -> NodeType {
         NodeType::GraphicEq
@@ -606,8 +517,8 @@ impl NodeBase for GraphicEqNode {
     impl_as_any!();
 }
 
-impl_single_input_port!(GraphicEqNode);
-impl_single_output_port!(GraphicEqNode);
+impl_input_port_nb!(GraphicEqNode, ["In"]);
+impl_single_output_port_nb!(GraphicEqNode);
 
 impl NodeUI for GraphicEqNode {
     fn is_active(&self) -> bool {

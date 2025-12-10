@@ -73,17 +73,10 @@ impl AudioGraphProcessor {
                 NodeType::AudioInput => {
                     if let Some(input_node) = node.as_any_mut().downcast_mut::<AudioInputNode>() {
                         if input_node.is_active {
-                            // 最初のチャンネルからデータを取得してスペクトラム解析（常に更新）
-                            // read()は状態を変更しないので、データを消費せずに読み取れる
-                            if let Some(buffer) = input_node.channel_buffers.first() {
+                            // 最初のチャンネルからデータを取得してスペクトラム解析
+                            if let Some(buffer) = input_node.buffers.output_buffers.first() {
                                 let samples = buffer.lock().read(FFT_SIZE);
-
-                                let mut analyzer = input_node.analyzer.lock();
-                                analyzer.push_samples(&samples);
-                                let spectrum_data = analyzer.compute_spectrum();
-
-                                let mut spectrum = input_node.spectrum.lock();
-                                spectrum.copy_from_slice(&spectrum_data);
+                                input_node.spectrum_display.update_from_samples(&samples);
                             }
                         }
                     }
@@ -92,16 +85,9 @@ impl AudioGraphProcessor {
                     if let Some(output_node) = node.as_any_mut().downcast_mut::<AudioOutputNode>() {
                         if output_node.is_active {
                             // 出力ノード自身のバッファからスペクトラム解析
-                            // read()は状態を変更しないので、データを消費せずに読み取れる
-                            if let Some(buffer) = output_node.channel_buffers.first() {
+                            if let Some(buffer) = output_node.buffers.input_buffers.first() {
                                 let samples = buffer.lock().read(FFT_SIZE);
-
-                                let mut analyzer = output_node.analyzer.lock();
-                                analyzer.push_samples(&samples);
-                                let spectrum_data = analyzer.compute_spectrum();
-
-                                let mut spectrum = output_node.spectrum.lock();
-                                spectrum.copy_from_slice(&spectrum_data);
+                                output_node.spectrum_display.update_from_samples(&samples);
                             }
                         }
                     }
@@ -109,7 +95,6 @@ impl AudioGraphProcessor {
                 NodeType::GraphicEq => {
                     if let Some(eq_node) = node.as_any_mut().downcast_mut::<GraphicEqNode>() {
                         if eq_node.show_spectrum {
-                            // 入力バッファからスペクトラムを取得
                             // GraphicEqは内部でFFTを使用しているので、そのスペクトラムを再利用
                             let eq = eq_node.graphic_eq.lock();
                             let spectrum_data = eq.get_input_spectrum();
@@ -155,7 +140,7 @@ impl AudioGraphProcessor {
                 if let Some(output_node) = node.as_any().downcast_ref::<AudioOutputNode>() {
                     if output_node.is_active {
                         // 各チャンネルに対してPassThroughエフェクトを作成
-                        for ch in 0..output_node.channels as usize {
+                        for ch in 0..output_node.channels() as usize {
                             if let Some(source_buffer) = Self::get_source_buffer(snarl, node_id, ch)
                             {
                                 // 出力ノードの入力バッファを使用
@@ -372,7 +357,7 @@ impl AudioGraphProcessor {
                             to_start_input.push((
                                 node_id,
                                 input_node.device_name.clone(),
-                                input_node.channel_buffers.clone(),
+                                input_node.buffers.output_buffers.clone(),
                             ));
                         } else if !input_node.is_active && self.active_nodes.contains_key(&node_id)
                         {
@@ -385,7 +370,7 @@ impl AudioGraphProcessor {
                         if output_node.is_active && !self.active_nodes.contains_key(&node_id) {
                             // 出力ノードは常に自身のバッファを使用
                             // データはeffect_processorによってソースからコピーされる
-                            let buffers = output_node.channel_buffers.clone();
+                            let buffers = output_node.buffers.input_buffers.clone();
                             to_start_output.push((
                                 node_id,
                                 output_node.device_name.clone(),

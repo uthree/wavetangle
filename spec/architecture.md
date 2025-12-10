@@ -40,6 +40,24 @@ src/
 ### ChannelBuffer (nodes/mod.rs)
 `Arc<Mutex<AudioBuffer>>` - チャンネルごとの共有バッファ。
 
+### NodeBuffers (nodes/mod.rs)
+ノードのバッファ管理を統一する構造体。入出力ノードと中間ノードで共通のインターフェースを提供。
+- `input_buffers`: 入力ピンごとのバッファ
+- `output_buffers`: 出力ピンごとのバッファ
+- `single_io()`: 1入力1出力ノード用（GainNode, FilterNode等）
+- `multi_input(n)`: N入力1出力ノード用（AddNode, MultiplyNode等）
+- `input_only(ch)`: 入力専用ノード用（AudioOutputNode）
+- `output_only(ch)`: 出力専用ノード用（AudioInputNode）
+- `resize_inputs()`/`resize_outputs()`: バッファ数の動的変更
+
+### SpectrumDisplay (nodes/mod.rs)
+IOノードのスペクトラム表示機能をカプセル化する構造体。
+- `enabled`: 表示有効フラグ
+- `spectrum`: スペクトラムデータ（FFTサイズ/2のf32配列）
+- `analyzer`: スペクトラムアナライザー（オプション）
+- `update_from_samples()`: サンプルデータからスペクトラムを更新
+- `show_line()`: 折れ線グラフでスペクトラムを表示
+
 ### NodeUIContext (nodes/mod.rs)
 UI描画時に必要なコンテキストを保持する構造体：
 - `input_devices`: 入力デバイス名のリスト
@@ -98,7 +116,7 @@ impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T
 ### ヘルパー関数 (nodes/mod.rs)
 コード重複を削減するための共通関数：
 - `channel_name()`: チャンネルインデックスからチャンネル名を取得（L, R, C, LFE, SL, SR）
-- `resize_channel_buffers()`: チャンネルバッファのサイズを調整
+- `new_channel_buffer()`: 新しいチャンネルバッファを作成
 
 ### AudioNode (nodes/mod.rs)
 `Box<dyn NodeBehavior>`の型エイリアス。動的ディスパッチによりノードを管理。
@@ -172,11 +190,11 @@ egui-snarlのSnarlViewerトレイトを実装。
 - コンテキストメニュー（ノード追加・削除）
 
 新しいノードタイプを追加する際は：
-1. 構造体を定義（`input_buffers`/`output_buffer`フィールドを含む）
+1. 構造体を定義（`buffers: NodeBuffers`フィールドを含む）
 2. 以下の4トレイトを実装：
    - `NodeBase`: `node_type()`, `title()`, `as_any()`, `as_any_mut()` （`impl_as_any!()`マクロ使用可）
-   - `AudioInputPort`: 入力ポートがある場合は実装（なければ空実装でデフォルト使用）
-   - `AudioOutputPort`: 出力ポートがある場合は実装（なければ空実装でデフォルト使用）
+   - `AudioInputPort`: 入力ポートがある場合は実装（`impl_input_port_nb!()`マクロ使用可）
+   - `AudioOutputPort`: 出力ポートがある場合は実装（`impl_single_output_port_nb!()`マクロ使用可）
    - `NodeUI`: `is_active()`, `set_active()`, `show_body()`
 3. `NodeType` enumにバリアントを追加
 4. ファクトリ関数を追加（`new_xxx() -> AudioNode`）
@@ -184,7 +202,9 @@ egui-snarlのSnarlViewerトレイトを実装。
 6. `project.rs`のシリアライズ/デシリアライズを更新
 7. 必要に応じて`graph.rs`と`effect_processor.rs`を更新
 
-1入力1出力のエフェクトノードの場合は`impl_single_input_port!`と`impl_single_output_port!`マクロを活用可能。
+エフェクトノード用のマクロ（NodeBuffers対応）：
+- `impl_input_port_nb!(NodeType, ["Pin1", "Pin2", ...])`: 任意の入力ピン名でAudioInputPortを実装
+- `impl_single_output_port_nb!(NodeType)`: 1出力ピン("Out")でAudioOutputPortを実装
 
 ## データフロー
 

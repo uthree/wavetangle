@@ -1,12 +1,8 @@
-use std::sync::Arc;
-
 use egui::Ui;
-use parking_lot::Mutex;
 
 use super::{
-    channel_name, impl_as_any, new_channel_buffer, resize_channel_buffers, show_spectrum_line,
-    AudioInputPort, AudioOutputPort, ChannelBuffer, NodeBase, NodeType, NodeUI, NodeUIContext,
-    PinType, DEFAULT_RING_BUFFER_SIZE, FFT_SIZE,
+    channel_name, impl_as_any, AudioInputPort, AudioOutputPort, ChannelBuffer, NodeBase,
+    NodeBuffers, NodeType, NodeUI, NodeUIContext, PinType, SpectrumDisplay, FFT_SIZE,
 };
 
 // ============================================================================
@@ -14,56 +10,35 @@ use super::{
 // ============================================================================
 
 /// オーディオ入力デバイスノード
+#[derive(Clone)]
 pub struct AudioInputNode {
     pub device_name: String,
-    /// チャンネルごとのバッファ
-    pub channel_buffers: Vec<ChannelBuffer>,
-    pub channels: u16,
+    /// バッファ管理（出力専用）
+    pub buffers: NodeBuffers,
     pub is_active: bool,
-    /// スペクトラム表示を有効にするか
-    pub show_spectrum: bool,
-    /// スペクトラムデータ
-    pub spectrum: Arc<Mutex<Vec<f32>>>,
-    /// スペクトラムアナライザー（最初のチャンネルを解析）
-    pub analyzer: Arc<Mutex<crate::dsp::SpectrumAnalyzer>>,
-}
-
-impl Clone for AudioInputNode {
-    fn clone(&self) -> Self {
-        Self {
-            device_name: self.device_name.clone(),
-            channel_buffers: self.channel_buffers.clone(),
-            channels: self.channels,
-            is_active: self.is_active,
-            show_spectrum: self.show_spectrum,
-            spectrum: self.spectrum.clone(),
-            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
-        }
-    }
+    /// スペクトラム表示
+    pub spectrum_display: SpectrumDisplay,
 }
 
 impl AudioInputNode {
     pub fn new(device_name: String, channels: u16) -> Self {
-        let channels = channels.max(1); // 最低1チャンネル
-        let channel_buffers = (0..channels)
-            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
-            .collect();
         Self {
             device_name,
-            channel_buffers,
-            channels,
+            buffers: NodeBuffers::output_only(channels),
             is_active: false,
-            show_spectrum: true,
-            spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
-            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
+    }
+
+    /// チャンネル数を取得
+    pub fn channels(&self) -> u16 {
+        self.buffers.output_count() as u16
     }
 
     /// チャンネル数に合わせてバッファを再作成
     pub fn resize_buffers(&mut self, channels: u16) {
-        if resize_channel_buffers(&mut self.channel_buffers, self.channels, channels) {
-            self.channels = channels;
-        }
+        let channels = channels.max(1);
+        self.buffers.resize_outputs(channels as usize);
     }
 }
 
@@ -89,11 +64,11 @@ impl AudioInputPort for AudioInputNode {}
 /// AudioInputNodeは出力ピンを持つ
 impl AudioOutputPort for AudioInputNode {
     fn output_count(&self) -> usize {
-        self.channel_buffers.len()
+        self.buffers.output_count()
     }
 
     fn output_pin_type(&self, index: usize) -> Option<PinType> {
-        if index < self.channel_buffers.len() {
+        if index < self.buffers.output_count() {
             Some(PinType::Audio)
         } else {
             None
@@ -105,11 +80,11 @@ impl AudioOutputPort for AudioInputNode {
     }
 
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        self.channel_buffers.get(channel).cloned()
+        self.buffers.output_buffer(channel)
     }
 
     fn channels(&self) -> u16 {
-        self.channels
+        self.buffers.output_count() as u16
     }
 
     fn set_channels(&mut self, channels: u16) {
@@ -131,7 +106,7 @@ impl NodeUI for AudioInputNode {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.is_active, "Active");
                 if self.is_active {
-                    ui.label(format!("{}ch", self.channels));
+                    ui.label(format!("{}ch", self.channels()));
                 }
             });
 
@@ -146,13 +121,10 @@ impl NodeUI for AudioInputNode {
 
             // スペクトラム表示（チェックボックスで切り替え）
             if self.is_active {
-                ui.checkbox(&mut self.show_spectrum, "Spectrum");
-                if self.show_spectrum {
-                    show_spectrum_line(
-                        ui,
-                        &format!("input_spectrum_{:?}", ctx.node_id),
-                        &self.spectrum,
-                    );
+                ui.checkbox(&mut self.spectrum_display.enabled, "Spectrum");
+                if self.spectrum_display.enabled {
+                    self.spectrum_display
+                        .show_line(ui, &format!("input_spectrum_{:?}", ctx.node_id));
                 }
             }
         });
@@ -164,56 +136,35 @@ impl NodeUI for AudioInputNode {
 // ============================================================================
 
 /// オーディオ出力デバイスノード
+#[derive(Clone)]
 pub struct AudioOutputNode {
     pub device_name: String,
-    /// チャンネルごとのバッファ
-    pub channel_buffers: Vec<ChannelBuffer>,
-    pub channels: u16,
+    /// バッファ管理（入力専用）
+    pub buffers: NodeBuffers,
     pub is_active: bool,
-    /// スペクトラム表示を有効にするか
-    pub show_spectrum: bool,
-    /// スペクトラムデータ
-    pub spectrum: Arc<Mutex<Vec<f32>>>,
-    /// スペクトラムアナライザー（最初のチャンネルを解析）
-    pub analyzer: Arc<Mutex<crate::dsp::SpectrumAnalyzer>>,
-}
-
-impl Clone for AudioOutputNode {
-    fn clone(&self) -> Self {
-        Self {
-            device_name: self.device_name.clone(),
-            channel_buffers: self.channel_buffers.clone(),
-            channels: self.channels,
-            is_active: self.is_active,
-            show_spectrum: self.show_spectrum,
-            spectrum: self.spectrum.clone(),
-            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
-        }
-    }
+    /// スペクトラム表示
+    pub spectrum_display: SpectrumDisplay,
 }
 
 impl AudioOutputNode {
     pub fn new(device_name: String, channels: u16) -> Self {
-        let channels = channels.max(1); // 最低1チャンネル
-        let channel_buffers = (0..channels)
-            .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
-            .collect();
         Self {
             device_name,
-            channel_buffers,
-            channels,
+            buffers: NodeBuffers::input_only(channels),
             is_active: false,
-            show_spectrum: true,
-            spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
-            analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
+            spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
+    }
+
+    /// チャンネル数を取得
+    pub fn channels(&self) -> u16 {
+        self.buffers.input_count() as u16
     }
 
     /// チャンネル数に合わせてバッファを再作成
     pub fn resize_buffers(&mut self, channels: u16) {
-        if resize_channel_buffers(&mut self.channel_buffers, self.channels, channels) {
-            self.channels = channels;
-        }
+        let channels = channels.max(1);
+        self.buffers.resize_inputs(channels as usize);
     }
 }
 
@@ -236,11 +187,11 @@ impl NodeBase for AudioOutputNode {
 /// AudioOutputNodeは入力ピンを持つ
 impl AudioInputPort for AudioOutputNode {
     fn input_count(&self) -> usize {
-        self.channel_buffers.len()
+        self.buffers.input_count()
     }
 
     fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index < self.channel_buffers.len() {
+        if index < self.buffers.input_count() {
             Some(PinType::Audio)
         } else {
             None
@@ -252,8 +203,7 @@ impl AudioInputPort for AudioOutputNode {
     }
 
     fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        // AudioOutputの入力はchannel_buffersと同じ（データを受け取る）
-        self.channel_buffers.get(index).cloned()
+        self.buffers.input_buffer(index)
     }
 }
 
@@ -263,11 +213,12 @@ impl AudioOutputPort for AudioOutputNode {
     // output_count, output_pin_type, output_pin_nameはデフォルト（0, None）を使用
 
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        self.channel_buffers.get(channel).cloned()
+        // 出力ノードでは入力バッファを返す（データ送出用）
+        self.buffers.input_buffer(channel)
     }
 
     fn channels(&self) -> u16 {
-        self.channels
+        self.buffers.input_count() as u16
     }
 
     fn set_channels(&mut self, channels: u16) {
@@ -289,7 +240,7 @@ impl NodeUI for AudioOutputNode {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.is_active, "Active");
                 if self.is_active {
-                    ui.label(format!("{}ch", self.channels));
+                    ui.label(format!("{}ch", self.channels()));
                 }
             });
 
@@ -304,13 +255,10 @@ impl NodeUI for AudioOutputNode {
 
             // スペクトラム表示（チェックボックスで切り替え）
             if self.is_active {
-                ui.checkbox(&mut self.show_spectrum, "Spectrum");
-                if self.show_spectrum {
-                    show_spectrum_line(
-                        ui,
-                        &format!("output_spectrum_{:?}", ctx.node_id),
-                        &self.spectrum,
-                    );
+                ui.checkbox(&mut self.spectrum_display.enabled, "Spectrum");
+                if self.spectrum_display.enabled {
+                    self.spectrum_display
+                        .show_line(ui, &format!("output_spectrum_{:?}", ctx.node_id));
                 }
             }
         });

@@ -14,3 +14,4 @@ rfd = "0.15"
 rustfft = "6.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+directories = "5.0"

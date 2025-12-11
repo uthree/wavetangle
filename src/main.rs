@@ -1,4 +1,5 @@
 mod audio;
+mod config;
 mod dsp;
 mod effect_processor;
 mod graph;
@@ -14,6 +15,7 @@ use egui_snarl::ui::SnarlStyle;
 use egui_snarl::Snarl;
 
 use crate::audio::{AudioSystem, BUFFER_SIZES, SAMPLE_RATES};
+use crate::config::AppConfig;
 use crate::graph::AudioGraphProcessor;
 use crate::nodes::AudioNode;
 use crate::project::ProjectFile;
@@ -38,6 +40,8 @@ struct WavetangleApp {
     current_file_path: Option<PathBuf>,
     /// ステータスメッセージ
     status_message: Option<(String, std::time::Instant)>,
+    /// アプリケーション設定
+    app_config: AppConfig,
 }
 
 impl WavetangleApp {
@@ -97,8 +101,33 @@ impl WavetangleApp {
             }
         }
 
+        // 設定を読み込み
+        let app_config = AppConfig::load();
+
+        // 最後に開いたファイルがあれば読み込む
+        let (snarl, current_file_path, status_message) =
+            if let Some(ref path) = app_config.last_opened_file {
+                if path.exists() {
+                    match ProjectFile::load_from_file(path) {
+                        Ok(project) => (
+                            project.to_snarl(),
+                            Some(path.clone()),
+                            Some((
+                                format!("Restored: {}", path.display()),
+                                std::time::Instant::now(),
+                            )),
+                        ),
+                        Err(_) => (Snarl::new(), None, None),
+                    }
+                } else {
+                    (Snarl::new(), None, None)
+                }
+            } else {
+                (Snarl::new(), None, None)
+            };
+
         Self {
-            snarl: Snarl::new(),
+            snarl,
             snarl_style: SnarlStyle::default(),
             audio_system,
             graph_processor: AudioGraphProcessor::new(),
@@ -107,8 +136,9 @@ impl WavetangleApp {
             input_device_channels,
             output_device_channels,
             show_audio_settings: false,
-            current_file_path: None,
-            status_message: None,
+            current_file_path,
+            status_message,
+            app_config,
         }
     }
 
@@ -133,6 +163,9 @@ impl WavetangleApp {
                     self.snarl = project.to_snarl();
                     self.current_file_path = Some(path.clone());
                     self.set_status(&format!("Opened: {}", path.display()));
+
+                    // 設定を更新
+                    self.app_config.set_last_opened(Some(path));
                 }
                 Err(e) => {
                     self.set_status(&format!("Error opening file: {}", e));
@@ -168,6 +201,9 @@ impl WavetangleApp {
             Ok(()) => {
                 self.current_file_path = Some(path.clone());
                 self.set_status(&format!("Saved: {}", path.display()));
+
+                // 設定を更新
+                self.app_config.set_last_opened(Some(path));
             }
             Err(e) => {
                 self.set_status(&format!("Error saving file: {}", e));
@@ -212,6 +248,8 @@ impl eframe::App for WavetangleApp {
                         self.snarl = Snarl::new();
                         self.current_file_path = None;
                         self.set_status("New project created");
+                        // 設定をクリア
+                        self.app_config.set_last_opened(None);
                         ui.close();
                     }
                     if ui.button("Open...").clicked() {

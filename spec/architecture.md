@@ -21,6 +21,7 @@ src/
 ├── effect_processor.rs  # エフェクト処理専用スレッド
 ├── graph.rs             # オーディオグラフの処理ロジック
 ├── project.rs           # プロジェクトの保存・読み込み
+├── config.rs            # アプリケーション設定（最後に開いたファイルなど）
 └── viewer.rs            # egui-snarlのSnarlViewer実装
 ```
 
@@ -270,6 +271,21 @@ egui-snarlのSnarlViewerトレイトを実装。
 - File > Save: 上書き保存
 - File > Save As...: 名前をつけて保存
 
+## アプリケーション設定 (config.rs)
+
+アプリケーション全体の設定を管理。`directories`クレートを使用してOSごとの設定ディレクトリにJSON形式で保存。
+
+### AppConfig
+- `last_opened_file`: 最後に開いたファイルのパス
+- アプリ起動時に設定を読み込み、最後に開いたファイルが存在すれば自動的に復元
+- ファイルを開く/保存する際に設定を自動更新
+- 新規プロジェクト作成時に設定をクリア
+
+設定ファイルの保存場所:
+- macOS: `~/Library/Application Support/Wavetangle/config.json`
+- Linux: `~/.config/Wavetangle/config.json`
+- Windows: `%APPDATA%\Wavetangle\config\config.json`
+
 ## 依存ライブラリ
 
 - **eframe/egui**: GUIフレームワーク
@@ -280,6 +296,7 @@ egui-snarlのSnarlViewerトレイトを実装。
 - **rustfft**: FFT実装（スペクトラムアナライザー用）
 - **serde/serde_json**: シリアライズ・デシリアライズ
 - **rfd**: ネイティブファイルダイアログ
+- **directories**: OS固有の設定ディレクトリの取得
 
 ## 今後の拡張予定
 

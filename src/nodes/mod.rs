@@ -471,7 +471,7 @@ pub trait AudioInputPort {
     }
 
     /// 入力ピンの名前
-    fn input_pin_name(&self, _index: usize) -> Option<&str> {
+    fn input_pin_name(&self, _index: usize) -> Option<String> {
         None
     }
 
@@ -497,7 +497,7 @@ pub trait AudioOutputPort {
     }
 
     /// 出力ピンの名前
-    fn output_pin_name(&self, _index: usize) -> Option<&str> {
+    fn output_pin_name(&self, _index: usize) -> Option<String> {
         None
     }
 
@@ -586,9 +586,9 @@ macro_rules! impl_input_port_nb {
                 }
             }
 
-            fn input_pin_name(&self, index: usize) -> Option<&'static str> {
+            fn input_pin_name(&self, index: usize) -> Option<String> {
                 const NAMES: &[&str] = &[$($name),+];
-                NAMES.get(index).copied()
+                NAMES.get(index).map(|s| s.to_string())
             }
 
             fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
@@ -615,9 +615,9 @@ macro_rules! impl_single_output_port_nb {
                 }
             }
 
-            fn output_pin_name(&self, index: usize) -> Option<&str> {
+            fn output_pin_name(&self, index: usize) -> Option<String> {
                 if index == 0 {
-                    Some("Out")
+                    Some("Out".to_string())
                 } else {
                     None
                 }
@@ -639,13 +639,9 @@ macro_rules! impl_single_output_port_nb {
 }
 pub(crate) use impl_single_output_port_nb;
 
-/// マルチチャンネルオーディオのチャンネル名
-/// サラウンド5.1chまで対応
-const CHANNEL_NAMES: &[&str] = &["L", "R", "C", "LFE", "SL", "SR"];
-
-/// チャンネルインデックスからチャンネル名を取得
-pub(crate) fn channel_name(index: usize) -> Option<&'static str> {
-    CHANNEL_NAMES.get(index).copied()
+/// チャンネルインデックスからチャンネル番号を取得（1始まり）
+pub(crate) fn channel_name(index: usize) -> String {
+    (index + 1).to_string()
 }
 
 // ============================================================================
@@ -828,13 +824,20 @@ mod tests {
     #[test]
     fn test_pin_names() {
         let node = AudioInputNode::new("test".to_string(), 6);
-        assert_eq!(node.output_pin_name(0), Some("L"));
-        assert_eq!(node.output_pin_name(1), Some("R"));
-        assert_eq!(node.output_pin_name(2), Some("C"));
-        assert_eq!(node.output_pin_name(3), Some("LFE"));
-        assert_eq!(node.output_pin_name(4), Some("SL"));
-        assert_eq!(node.output_pin_name(5), Some("SR"));
+        assert_eq!(node.output_pin_name(0).as_deref(), Some("1"));
+        assert_eq!(node.output_pin_name(1).as_deref(), Some("2"));
+        assert_eq!(node.output_pin_name(2).as_deref(), Some("3"));
+        assert_eq!(node.output_pin_name(3).as_deref(), Some("4"));
+        assert_eq!(node.output_pin_name(4).as_deref(), Some("5"));
+        assert_eq!(node.output_pin_name(5).as_deref(), Some("6"));
+        // チャンネル数を超えるインデックスはNone
         assert_eq!(node.output_pin_name(6), None);
+
+        // 大きなチャンネル数でもチャンネル番号が正しく返される
+        let node = AudioInputNode::new("test".to_string(), 20);
+        assert_eq!(node.output_pin_name(15).as_deref(), Some("16"));
+        assert_eq!(node.output_pin_name(19).as_deref(), Some("20"));
+        assert_eq!(node.output_pin_name(20), None);
     }
 
     #[test]
@@ -851,7 +854,7 @@ mod tests {
         // 出力ポートはチャンネル数に応じて存在
         assert_eq!(node.output_count(), 2);
         assert_eq!(node.output_pin_type(0), Some(PinType::Audio));
-        assert_eq!(node.output_pin_name(0), Some("L"));
+        assert_eq!(node.output_pin_name(0).as_deref(), Some("1"));
         assert!(node.channel_buffer(0).is_some());
     }
 
@@ -863,7 +866,7 @@ mod tests {
         // 入力ポートはチャンネル数に応じて存在
         assert_eq!(node.input_count(), 2);
         assert_eq!(node.input_pin_type(0), Some(PinType::Audio));
-        assert_eq!(node.input_pin_name(0), Some("L"));
+        assert_eq!(node.input_pin_name(0).as_deref(), Some("1"));
 
         // 出力ポートはデフォルト実装（0個）
         assert_eq!(node.output_count(), 0);
@@ -879,8 +882,8 @@ mod tests {
         assert_eq!(gain.output_count(), 1);
         assert_eq!(gain.input_pin_type(0), Some(PinType::Audio));
         assert_eq!(gain.output_pin_type(0), Some(PinType::Audio));
-        assert_eq!(gain.input_pin_name(0), Some("In"));
-        assert_eq!(gain.output_pin_name(0), Some("Out"));
+        assert_eq!(gain.input_pin_name(0).as_deref(), Some("In"));
+        assert_eq!(gain.output_pin_name(0).as_deref(), Some("Out"));
 
         let filter = FilterNode::new();
         assert_eq!(filter.input_count(), 1);
@@ -909,9 +912,9 @@ mod tests {
         let add = AddNode::new();
         assert_eq!(add.input_count(), 2);
         assert_eq!(add.output_count(), 1);
-        assert_eq!(add.input_pin_name(0), Some("A"));
-        assert_eq!(add.input_pin_name(1), Some("B"));
-        assert_eq!(add.output_pin_name(0), Some("Out"));
+        assert_eq!(add.input_pin_name(0).as_deref(), Some("A"));
+        assert_eq!(add.input_pin_name(1).as_deref(), Some("B"));
+        assert_eq!(add.output_pin_name(0).as_deref(), Some("Out"));
         assert!(add.input_buffer(0).is_some());
         assert!(add.input_buffer(1).is_some());
         assert!(add.input_buffer(2).is_none());
@@ -919,8 +922,8 @@ mod tests {
         let multiply = MultiplyNode::new();
         assert_eq!(multiply.input_count(), 2);
         assert_eq!(multiply.output_count(), 1);
-        assert_eq!(multiply.input_pin_name(0), Some("A"));
-        assert_eq!(multiply.input_pin_name(1), Some("B"));
+        assert_eq!(multiply.input_pin_name(0).as_deref(), Some("A"));
+        assert_eq!(multiply.input_pin_name(1).as_deref(), Some("B"));
     }
 
     // ========================================================================

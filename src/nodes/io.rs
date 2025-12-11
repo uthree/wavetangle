@@ -25,7 +25,7 @@ impl AudioInputNode {
         Self {
             device_name,
             buffers: NodeBuffers::output_only(channels),
-            is_active: false,
+            is_active: true,
             spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
     }
@@ -75,8 +75,12 @@ impl AudioOutputPort for AudioInputNode {
         }
     }
 
-    fn output_pin_name(&self, index: usize) -> Option<&str> {
-        channel_name(index)
+    fn output_pin_name(&self, index: usize) -> Option<String> {
+        if index < self.buffers.output_count() {
+            Some(channel_name(index))
+        } else {
+            None
+        }
     }
 
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
@@ -151,7 +155,7 @@ impl AudioOutputNode {
         Self {
             device_name,
             buffers: NodeBuffers::input_only(channels),
-            is_active: false,
+            is_active: true,
             spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
     }
@@ -198,8 +202,12 @@ impl AudioInputPort for AudioOutputNode {
         }
     }
 
-    fn input_pin_name(&self, index: usize) -> Option<&str> {
-        channel_name(index)
+    fn input_pin_name(&self, index: usize) -> Option<String> {
+        if index < self.buffers.input_count() {
+            Some(channel_name(index))
+        } else {
+            None
+        }
     }
 
     fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {

@@ -272,11 +272,11 @@ impl NodeUI for CompressorNode {
 }
 
 // ============================================================================
-// PitchShift Node - PSOLAピッチシフト
+// WsolaPitchShift Node - WSOLAピッチシフト
 // ============================================================================
 
-/// ピッチシフトノード
-pub struct PitchShiftNode {
+/// WSOLAピッチシフトノード
+pub struct WsolaPitchShiftNode {
     /// ピッチシフト量（半音単位、-12〜+12）
     pub semitones: f32,
     /// グレインサイズ（サンプル数、128〜8192）
@@ -297,7 +297,7 @@ pub struct PitchShiftNode {
     pub pitch_shifter: Arc<Mutex<crate::dsp::PitchShifter>>,
 }
 
-impl Clone for PitchShiftNode {
+impl Clone for WsolaPitchShiftNode {
     fn clone(&self) -> Self {
         Self {
             semitones: self.semitones,
@@ -318,7 +318,7 @@ impl Clone for PitchShiftNode {
     }
 }
 
-impl PitchShiftNode {
+impl WsolaPitchShiftNode {
     pub fn new() -> Self {
         let default_params = crate::dsp::PhaseAlignmentParams::default();
         Self {
@@ -335,29 +335,29 @@ impl PitchShiftNode {
     }
 }
 
-impl Default for PitchShiftNode {
+impl Default for WsolaPitchShiftNode {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// PitchShiftNodeのトレイト実装（NodeBuffers対応マクロを使用）
-impl NodeBase for PitchShiftNode {
+// WsolaPitchShiftNodeのトレイト実装（NodeBuffers対応マクロを使用）
+impl NodeBase for WsolaPitchShiftNode {
     fn node_type(&self) -> NodeType {
-        NodeType::PitchShift
+        NodeType::WsolaPitchShift
     }
 
     fn title(&self) -> &str {
-        "Pitch Shift"
+        "WSOLA Pitch Shift"
     }
 
     impl_as_any!();
 }
 
-impl_input_port_nb!(PitchShiftNode, ["In"]);
-impl_single_output_port_nb!(PitchShiftNode);
+impl_input_port_nb!(WsolaPitchShiftNode, ["In"]);
+impl_single_output_port_nb!(WsolaPitchShiftNode);
 
-impl NodeUI for PitchShiftNode {
+impl NodeUI for WsolaPitchShiftNode {
     fn is_active(&self) -> bool {
         self.is_active
     }

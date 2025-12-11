@@ -6,8 +6,8 @@ use crate::audio::{AudioSystem, OutputStreamId};
 use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
 use crate::nodes::{
     AudioInputNode, AudioInputPort, AudioNode, AudioOutputNode, AudioOutputPort, ChannelBuffer,
-    CompressorNode, FilterNode, GainNode, GraphicEqNode, NodeType, PitchShiftNode,
-    SpectrumAnalyzerNode,
+    CompressorNode, FilterNode, GainNode, GraphicEqNode, NodeType, SpectrumAnalyzerNode,
+    WsolaPitchShiftNode,
 };
 
 /// アクティブノードの状態
@@ -280,10 +280,10 @@ impl AudioGraphProcessor {
                     1,
                 )
             }
-            NodeType::PitchShift => {
-                let pitch_node = node.as_any().downcast_ref::<PitchShiftNode>()?;
+            NodeType::WsolaPitchShift => {
+                let pitch_node = node.as_any().downcast_ref::<WsolaPitchShiftNode>()?;
                 (
-                    EffectNodeType::PitchShift {
+                    EffectNodeType::WsolaPitchShift {
                         semitones: pitch_node.semitones,
                         phase_alignment_enabled: pitch_node.phase_alignment_enabled,
                         search_range_ratio: pitch_node.search_range_ratio,
@@ -393,7 +393,7 @@ impl AudioGraphProcessor {
                 | NodeType::Filter
                 | NodeType::SpectrumAnalyzer
                 | NodeType::Compressor
-                | NodeType::PitchShift
+                | NodeType::WsolaPitchShift
                 | NodeType::GraphicEq => {}
             }
         }

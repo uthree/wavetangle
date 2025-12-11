@@ -56,7 +56,7 @@ pub enum EffectNodeType {
         makeup_gain: f32,
         state: Arc<Mutex<crate::dsp::CompressorState>>,
     },
-    PitchShift {
+    WsolaPitchShift {
         semitones: f32,
         phase_alignment_enabled: bool,
         search_range_ratio: f32,
@@ -349,7 +349,7 @@ impl EffectProcessor {
                 let mut state = state.lock();
                 input_a.iter().map(|&s| state.process(s, &params)).collect()
             }
-            EffectNodeType::PitchShift {
+            EffectNodeType::WsolaPitchShift {
                 semitones,
                 phase_alignment_enabled,
                 search_range_ratio,

@@ -13,7 +13,7 @@ src/
 ├── nodes/               # オーディオノードの定義
 │   ├── mod.rs           # 共通型、トレイト、ファクトリ関数、テスト
 │   ├── io.rs            # AudioInputNode, AudioOutputNode
-│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, PitchShiftNode, GraphicEqNode
+│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, GraphicEqNode
 │   ├── math.rs          # AddNode, MultiplyNode
 │   └── analyzer.rs      # SpectrumAnalyzerNode
 ├── audio.rs             # cpalを使用したオーディオシステム
@@ -110,7 +110,7 @@ impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T
 ### NodeType enum (nodes/mod.rs)
 ノードの型を識別するためのenum：
 - `AudioInput`, `AudioOutput`, `Gain`, `Add`, `Multiply`, `Filter`
-- `SpectrumAnalyzer`, `Compressor`, `PitchShift`, `GraphicEq`
+- `SpectrumAnalyzer`, `Compressor`, `WsolaPitchShift`, `GraphicEq`
 
 ランタイムで型を判別し、`as_any()`と組み合わせて具体型にダウンキャストする際に使用。
 
@@ -131,13 +131,13 @@ impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T
 - `FilterNode` (effects.rs): フィルターノード（1入力1出力、Low/High/Band Pass、カットオフ周波数、Q値）
 - `SpectrumAnalyzerNode` (analyzer.rs): スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
 - `CompressorNode` (effects.rs): コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
-- `PitchShiftNode` (effects.rs): ピッチシフター（1入力1出力、PSOLAアルゴリズム、-12〜+12半音）
+- `WsolaPitchShiftNode` (effects.rs): WSOLAピッチシフター（1入力1出力、波形類似度ベースのピッチシフト、-12〜+12半音）
 - `GraphicEqNode` (effects.rs): グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
 
 ファクトリ関数でノードを生成（nodes/mod.rsで定義）：
 - `new_audio_input(device_name, channels)`, `new_audio_output(device_name, channels)`: チャンネル数を指定して生成
 - `new_gain()`, `new_add()`, `new_multiply()`, `new_filter()`, `new_spectrum_analyzer()`
-- `new_compressor()`, `new_pitch_shift()`, `new_graphic_eq()`
+- `new_compressor()`, `new_wsola_pitch_shift()`, `new_graphic_eq()`
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。
@@ -168,7 +168,7 @@ cpalを使用したオーディオデバイス管理システム。
   - `source_buffers`: 接続元ノードの出力バッファ（データコピー元）
   - `input_buffers`: ノード自身の入力バッファ（データコピー先、処理用）
   - `output_buffer`: ノード自身の出力バッファ
-- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, PitchShift, GraphicEq, PassThrough）
+- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, WsolaPitchShift, GraphicEq, PassThrough）
 - 処理フロー（スナップショット方式）:
   1. **Phase 1 - スナップショット作成**: 全ソースバッファから`read()`でデータを読み取り、スナップショットを作成
      - 同じソースバッファを複数ノードが参照していても、データは一度だけ読み取る
@@ -242,7 +242,7 @@ egui-snarlのSnarlViewerトレイトを実装。
   - Hann窓、1024点FFT
   - 指数移動平均によるスムージング（係数0.8）
   - egui_plotでバーチャート表示（48バンド、対数周波数スケール）
-- `PitchShifter`: グラニュラー合成ベースのピッチシフト
+- `PitchShifter`: WSOLAベースのピッチシフト（波形類似度による位相アラインメント付きグラニュラー合成）
   - 動的に調整可能なパラメータ（グレインサイズ、グレイン数）
   - デフォルト: 4グレインオーバーラップ、1024サンプルグレインサイズ
   - ハン窓による滑らかなクロスフェード

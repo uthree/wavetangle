@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::EqPoint;
 use crate::nodes::{
     AddNode, AudioInputNode, AudioNode, AudioOutputNode, CompressorNode, FilterNode, FilterType,
-    GainNode, GraphicEqNode, MultiplyNode, NodeType, PitchShiftNode, SpectrumAnalyzerNode,
+    GainNode, GraphicEqNode, MultiplyNode, NodeType, SpectrumAnalyzerNode, WsolaPitchShiftNode,
 };
 
 /// プロジェクトファイルのバージョン
@@ -84,7 +84,7 @@ pub enum SavedNode {
         release: f32,
         makeup_gain: f32,
     },
-    PitchShift {
+    WsolaPitchShift {
         semitones: f32,
         grain_size: usize,
         num_grains: usize,
@@ -217,9 +217,9 @@ impl ProjectFile {
                         makeup_gain: n.makeup_gain,
                     }
                 }
-                NodeType::PitchShift => {
-                    let n = node.as_any().downcast_ref::<PitchShiftNode>().unwrap();
-                    SavedNode::PitchShift {
+                NodeType::WsolaPitchShift => {
+                    let n = node.as_any().downcast_ref::<WsolaPitchShiftNode>().unwrap();
+                    SavedNode::WsolaPitchShift {
                         semitones: n.semitones,
                         grain_size: n.grain_size,
                         num_grains: n.num_grains,
@@ -337,7 +337,7 @@ impl ProjectFile {
                     node.makeup_gain = *makeup_gain;
                     Box::new(node)
                 }
-                SavedNode::PitchShift {
+                SavedNode::WsolaPitchShift {
                     semitones,
                     grain_size,
                     num_grains,
@@ -345,7 +345,7 @@ impl ProjectFile {
                     search_range_ratio,
                     correlation_length_ratio,
                 } => {
-                    let mut node = PitchShiftNode::new();
+                    let mut node = WsolaPitchShiftNode::new();
                     node.semitones = *semitones;
                     node.grain_size = *grain_size;
                     node.num_grains = *num_grains;

@@ -63,6 +63,11 @@ pub enum EffectNodeType {
         correlation_length_ratio: f32,
         pitch_shifter: Arc<Mutex<crate::dsp::PitchShifter>>,
     },
+    TdPsolaPitchShift {
+        pitch_shift: f32,
+        formant_shift: f32,
+        td_psola: Arc<Mutex<crate::dsp::TdPsolaPitchShifter>>,
+    },
     GraphicEq {
         graphic_eq: Arc<Mutex<crate::dsp::GraphicEq>>,
     },
@@ -366,6 +371,19 @@ impl EffectProcessor {
                 });
                 let mut output = vec![0.0; input_a.len()];
                 shifter.process(&input_a, &mut output);
+                output
+            }
+            EffectNodeType::TdPsolaPitchShift {
+                pitch_shift,
+                formant_shift,
+                td_psola,
+            } => {
+                let mut processor = td_psola.lock();
+                processor.set_pitch_shift(*pitch_shift);
+                processor.set_formant_shift(*formant_shift);
+
+                let mut output = vec![0.0; input_a.len()];
+                processor.process(&input_a, &mut output);
                 output
             }
             EffectNodeType::GraphicEq { graphic_eq } => {

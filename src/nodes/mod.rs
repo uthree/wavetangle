@@ -21,7 +21,8 @@ pub const EQ_FFT_SIZE: usize = 2048;
 // サブモジュールからの公開re-export
 pub use analyzer::SpectrumAnalyzerNode;
 pub use effects::{
-    CompressorNode, FilterNode, FilterType, GainNode, GraphicEqNode, WsolaPitchShiftNode,
+    CompressorNode, FilterNode, FilterType, GainNode, GraphicEqNode, TdPsolaPitchShiftNode,
+    WsolaPitchShiftNode,
 };
 pub use io::{AudioInputNode, AudioOutputNode};
 pub use math::{AddNode, MultiplyNode};
@@ -433,6 +434,7 @@ pub enum NodeType {
     SpectrumAnalyzer,
     Compressor,
     WsolaPitchShift,
+    TdPsolaPitchShift,
     GraphicEq,
 }
 
@@ -699,6 +701,11 @@ pub fn new_wsola_pitch_shift() -> AudioNode {
 /// GraphicEqノードを作成
 pub fn new_graphic_eq() -> AudioNode {
     Box::new(GraphicEqNode::new())
+}
+
+/// TdPsolaPitchShiftノードを作成
+pub fn new_td_psola_pitch_shift() -> AudioNode {
+    Box::new(TdPsolaPitchShiftNode::new())
 }
 
 #[cfg(test)]

@@ -6,7 +6,8 @@ use egui_snarl::{InPin, NodeId, OutPin, Snarl};
 
 use crate::nodes::{
     new_add, new_audio_input, new_audio_output, new_compressor, new_filter, new_gain,
-    new_graphic_eq, new_multiply, new_spectrum_analyzer, new_wsola_pitch_shift, AudioNode, PinType,
+    new_graphic_eq, new_multiply, new_spectrum_analyzer, new_td_psola_pitch_shift,
+    new_wsola_pitch_shift, AudioNode, PinType,
 };
 
 /// ピンタイプに応じた色を取得
@@ -209,6 +210,10 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             }
             if ui.button("WSOLA Pitch Shift").clicked() {
                 snarl.insert_node(pos, new_wsola_pitch_shift());
+                ui.close();
+            }
+            if ui.button("TD-PSOLA Pitch Shift").clicked() {
+                snarl.insert_node(pos, new_td_psola_pitch_shift());
                 ui.close();
             }
             if ui.button("Graphic EQ").clicked() {

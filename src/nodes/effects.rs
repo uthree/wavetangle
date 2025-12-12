@@ -463,6 +463,8 @@ pub struct TdPsolaPitchShiftNode {
     pub is_active: bool,
     /// TD-PSOLAピッチシフター（スレッドセーフ）
     pub td_psola: Arc<Mutex<crate::dsp::TdPsolaPitchShifter>>,
+    /// 表示用にキャッシュされた周波数
+    cached_freq: f32,
 }
 
 impl Clone for TdPsolaPitchShiftNode {
@@ -474,6 +476,7 @@ impl Clone for TdPsolaPitchShiftNode {
             buffers: self.buffers.clone(),
             is_active: self.is_active,
             td_psola: Arc::new(Mutex::new(crate::dsp::TdPsolaPitchShifter::new(48000.0))),
+            cached_freq: 0.0,
         }
     }
 }
@@ -487,6 +490,7 @@ impl TdPsolaPitchShiftNode {
             buffers: NodeBuffers::single_io(),
             is_active: false,
             td_psola: Arc::new(Mutex::new(crate::dsp::TdPsolaPitchShifter::new(48000.0))),
+            cached_freq: 0.0,
         }
     }
 }
@@ -564,13 +568,17 @@ impl NodeUI for TdPsolaPitchShiftNode {
                 }
 
                 // 現在検出されているピッチを表示
+                // try_lock()が失敗しても前回の値を表示し続ける
                 if let Some(td_psola) = self.td_psola.try_lock() {
                     let freq = td_psola.current_frequency();
                     if freq > 0.0 {
-                        ui.label(format!("Detected: {:.1} Hz", freq));
-                    } else {
-                        ui.label("Detected: (unvoiced)");
+                        self.cached_freq = freq;
                     }
+                }
+                if self.cached_freq > 0.0 {
+                    ui.label(format!("Detected: {:.1} Hz", self.cached_freq));
+                } else {
+                    ui.label("Detected: ---");
                 }
             });
         });

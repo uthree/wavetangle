@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::EqPoint;
 use crate::nodes::{
     AddNode, AudioInputNode, AudioNode, AudioOutputNode, CompressorNode, FilterNode, FilterType,
-    GainNode, GraphicEqNode, MultiplyNode, NodeType, SpectrumAnalyzerNode, TdPsolaPitchShiftNode,
-    WsolaPitchShiftNode,
+    GainNode, GraphicEqNode, MultiplyNode, NodeType, SpectrumAnalyzerNode, WsolaPitchShiftNode,
 };
 
 /// プロジェクトファイルのバージョン
@@ -29,9 +28,6 @@ fn default_search_range_ratio() -> f32 {
 }
 fn default_correlation_length_ratio() -> f32 {
     0.75
-}
-fn default_yin_threshold() -> f32 {
-    0.15
 }
 
 /// ノードの位置情報
@@ -102,12 +98,6 @@ pub enum SavedNode {
     GraphicEq {
         eq_points: Vec<SavedEqPoint>,
         show_spectrum: bool,
-    },
-    TdPsolaPitchShift {
-        pitch_shift: f32,
-        formant_shift: f32,
-        #[serde(default = "default_yin_threshold")]
-        yin_threshold: f32,
     },
 }
 
@@ -243,17 +233,6 @@ impl ProjectFile {
                     SavedNode::GraphicEq {
                         eq_points: n.eq_points.iter().map(SavedEqPoint::from).collect(),
                         show_spectrum: n.show_spectrum,
-                    }
-                }
-                NodeType::TdPsolaPitchShift => {
-                    let n = node
-                        .as_any()
-                        .downcast_ref::<TdPsolaPitchShiftNode>()
-                        .unwrap();
-                    SavedNode::TdPsolaPitchShift {
-                        pitch_shift: n.pitch_shift,
-                        formant_shift: n.formant_shift,
-                        yin_threshold: n.yin_threshold,
                     }
                 }
             };
@@ -394,23 +373,6 @@ impl ProjectFile {
                     node.show_spectrum = *show_spectrum;
                     // EQカーブを更新
                     node.graphic_eq.lock().update_curve(&node.eq_points);
-                    Box::new(node)
-                }
-                SavedNode::TdPsolaPitchShift {
-                    pitch_shift,
-                    formant_shift,
-                    yin_threshold,
-                } => {
-                    let mut node = TdPsolaPitchShiftNode::new();
-                    node.pitch_shift = *pitch_shift;
-                    node.formant_shift = *formant_shift;
-                    node.yin_threshold = *yin_threshold;
-                    // TD-PSOLAにもパラメータを反映
-                    if let Some(mut processor) = node.td_psola.try_lock() {
-                        processor.set_pitch_shift(*pitch_shift);
-                        processor.set_formant_shift(*formant_shift);
-                        processor.set_yin_threshold(*yin_threshold);
-                    }
                     Box::new(node)
                 }
             };

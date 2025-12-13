@@ -13,7 +13,7 @@ src/
 ├── nodes/               # オーディオノードの定義
 │   ├── mod.rs           # 共通型、トレイト、ファクトリ関数、テスト
 │   ├── io.rs            # AudioInputNode, AudioOutputNode
-│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, TdPsolaPitchShiftNode, GraphicEqNode
+│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, GraphicEqNode
 │   ├── math.rs          # AddNode, MultiplyNode
 │   └── analyzer.rs      # SpectrumAnalyzerNode
 ├── dsp/                 # DSPアルゴリズム（モジュール分割）
@@ -24,8 +24,7 @@ src/
 │   ├── pitch_shifter.rs # WSOLAピッチシフター
 │   ├── graphic_eq.rs    # グラフィックEQ
 │   ├── interpolation.rs # 補間アルゴリズム（Interpolator trait）
-│   ├── yin.rs           # YINピッチ検出
-│   └── td_psola.rs      # TD-PSOLAピッチシフター
+│   └── yin.rs           # YINピッチ検出（将来の利用のため残留）
 ├── audio.rs             # cpalを使用したオーディオシステム
 ├── effect_processor.rs  # エフェクト処理専用スレッド
 ├── graph.rs             # オーディオグラフの処理ロジック
@@ -119,7 +118,7 @@ impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T
 ### NodeType enum (nodes/mod.rs)
 ノードの型を識別するためのenum：
 - `AudioInput`, `AudioOutput`, `Gain`, `Add`, `Multiply`, `Filter`
-- `SpectrumAnalyzer`, `Compressor`, `WsolaPitchShift`, `TdPsolaPitchShift`, `GraphicEq`
+- `SpectrumAnalyzer`, `Compressor`, `WsolaPitchShift`, `GraphicEq`
 
 ランタイムで型を判別し、`as_any()`と組み合わせて具体型にダウンキャストする際に使用。
 
@@ -141,13 +140,12 @@ impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T
 - `SpectrumAnalyzerNode` (analyzer.rs): スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
 - `CompressorNode` (effects.rs): コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
 - `WsolaPitchShiftNode` (effects.rs): WSOLAピッチシフター（1入力1出力、波形類似度ベースのピッチシフト、-12〜+12半音）
-- `TdPsolaPitchShiftNode` (effects.rs): TD-PSOLAピッチシフター（1入力1出力、ピッチとフォルマントを独立に制御、-24〜+24半音）
 - `GraphicEqNode` (effects.rs): グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
 
 ファクトリ関数でノードを生成（nodes/mod.rsで定義）：
 - `new_audio_input(device_name, channels)`, `new_audio_output(device_name, channels)`: チャンネル数を指定して生成
 - `new_gain()`, `new_add()`, `new_multiply()`, `new_filter()`, `new_spectrum_analyzer()`
-- `new_compressor()`, `new_wsola_pitch_shift()`, `new_td_psola_pitch_shift()`, `new_graphic_eq()`
+- `new_compressor()`, `new_wsola_pitch_shift()`, `new_graphic_eq()`
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。
@@ -178,7 +176,7 @@ cpalを使用したオーディオデバイス管理システム。
   - `source_buffers`: 接続元ノードの出力バッファ（データコピー元）
   - `input_buffers`: ノード自身の入力バッファ（データコピー先、処理用）
   - `output_buffer`: ノード自身の出力バッファ
-- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, WsolaPitchShift, TdPsolaPitchShift, GraphicEq, PassThrough）
+- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, WsolaPitchShift, GraphicEq, PassThrough）
 - 処理フロー（スナップショット方式）:
   1. **Phase 1 - スナップショット作成**: 全ソースバッファから`read()`でデータを読み取り、スナップショットを作成
      - 同じソースバッファを複数ノードが参照していても、データは一度だけ読み取る
@@ -288,18 +286,7 @@ egui-snarlのSnarlViewerトレイトを実装。
   - 放物線補間によるサブサンプル精度の周期検出
   - 無声音時は前回のピッチを継続（フォールバック機能）
   - 検出周波数範囲: 50Hz〜1000Hz（設定可能）
-
-### TD-PSOLAピッチシフター (td_psola.rs)
-- `TdPsolaPitchShifter`: ピッチとフォルマントを独立に制御できるピッチシフト
-  - YINピッチ検出を使用してピッチ周期を取得
-  - 周期ごとにグレインを生成、Hann窓で成形
-  - フォルマントシフト: グレインをリサンプリングで伸縮
-  - ピッチシフト: グレインの出力間隔を変更してoverlap-add
-  - パラメータ:
-    - `pitch_shift_semitones`: ピッチ変更量（-24〜+24半音）
-    - `formant_shift_semitones`: フォルマント変更量（-24〜+24半音）
-    - `yin_threshold`: YIN閾値（0.05〜0.5）
-  - 補間アルゴリズムは`Interpolator` traitで抽象化（初期実装は線形補間）
+  - 現在は将来の利用のために残されている
 
 ## プロジェクトファイル (project.rs)
 

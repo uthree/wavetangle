@@ -7,7 +7,7 @@ use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
 use crate::nodes::{
     AudioInputNode, AudioInputPort, AudioNode, AudioOutputNode, AudioOutputPort, ChannelBuffer,
     CompressorNode, FilterNode, GainNode, GraphicEqNode, NodeType, SpectrumAnalyzerNode,
-    TdPsolaPitchShiftNode, WsolaPitchShiftNode,
+    WsolaPitchShiftNode,
 };
 
 /// アクティブノードの状態
@@ -293,17 +293,6 @@ impl AudioGraphProcessor {
                     1,
                 )
             }
-            NodeType::TdPsolaPitchShift => {
-                let pitch_node = node.as_any().downcast_ref::<TdPsolaPitchShiftNode>()?;
-                (
-                    EffectNodeType::TdPsolaPitchShift {
-                        pitch_shift: pitch_node.pitch_shift,
-                        formant_shift: pitch_node.formant_shift,
-                        td_psola: pitch_node.td_psola.clone(),
-                    },
-                    1,
-                )
-            }
             NodeType::GraphicEq => {
                 let eq_node = node.as_any().downcast_ref::<GraphicEqNode>()?;
                 (
@@ -405,7 +394,6 @@ impl AudioGraphProcessor {
                 | NodeType::SpectrumAnalyzer
                 | NodeType::Compressor
                 | NodeType::WsolaPitchShift
-                | NodeType::TdPsolaPitchShift
                 | NodeType::GraphicEq => {}
             }
         }

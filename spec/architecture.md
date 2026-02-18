@@ -11,7 +11,7 @@ Wavetangleは、egui-snarlを使用したノードベースのオーディオグ
 src/
 ├── main.rs              # アプリケーションエントリーポイント、eframeアプリ実装
 ├── nodes/               # オーディオノードの定義
-│   ├── mod.rs           # 共通型、トレイト、ファクトリ関数、テスト
+│   ├── mod.rs           # AudioNode enum、共通型、トレイト、テスト
 │   ├── io.rs            # AudioInputNode, AudioOutputNode
 │   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, GraphicEqNode
 │   ├── math.rs          # AddNode, MultiplyNode
@@ -74,13 +74,7 @@ UI描画時に必要なコンテキストを保持する構造体：
 - `node_id`: ウィジェットの一意識別用ノードID
 
 ### ノードトレイト設計 (nodes/mod.rs)
-ノードの機能は4つの独立したトレイトに分割されており、入力専用/出力専用/中間ノードを適切に表現できる：
-
-#### NodeBase trait
-ノードの基本情報を提供するコアトレイト：
-- `node_type()`: ノードの型を返す（NodeType enum）
-- `title()`: ノードのタイトル
-- `as_any()`, `as_any_mut()`: ダウンキャスト用のAny参照を取得
+ノードの機能は3つの独立したトレイトに分割されており、入力専用/出力専用/中間ノードを適切に表現できる：
 
 #### AudioInputPort trait
 オーディオ入力ポートを持つノード向けトレイト（デフォルト実装あり）：
@@ -102,35 +96,22 @@ UI描画時に必要なコンテキストを保持する構造体：
 - `is_active()`, `set_active()`: アクティブ状態
 - `show_body()`: ノードボディのUI描画（NodeUIContextを受け取る）
 
-#### NodeBehavior trait（スーパートレイト）
-上記4トレイトを統合したスーパートレイト。ブランケット実装により自動的に付与される：
-```rust
-pub trait NodeBehavior: NodeBase + AudioInputPort + AudioOutputPort + NodeUI {}
-impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T {}
-```
-
 このトレイト分割により：
 - `AudioInputNode`: `AudioOutputPort`のみ実装（出力専用）
 - `AudioOutputNode`: `AudioInputPort`のみ実装（入力専用）
 - エフェクトノード: 両方のポートトレイトを実装（中間ノード）
 - 将来的にMIDIポート用トレイトを追加可能
 
-### NodeType enum (nodes/mod.rs)
-ノードの型を識別するためのenum：
-- `AudioInput`, `AudioOutput`, `Gain`, `Add`, `Multiply`, `Filter`
-- `SpectrumAnalyzer`, `Compressor`, `WsolaPitchShift`, `GraphicEq`
-
-ランタイムで型を判別し、`as_any()`と組み合わせて具体型にダウンキャストする際に使用。
-
 ### ヘルパー関数 (nodes/mod.rs)
 コード重複を削減するための共通関数：
 - `channel_name()`: チャンネルインデックスからチャンネル名を取得（L, R, C, LFE, SL, SR）
 - `new_channel_buffer()`: 新しいチャンネルバッファを作成
 
-### AudioNode (nodes/mod.rs)
-`Box<dyn NodeBehavior>`の型エイリアス。動的ディスパッチによりノードを管理。
+### AudioNode enum (nodes/mod.rs)
+全ノード型を包含するenum。`delegate!`マクロによりトレイトメソッドを内部の具体型にデリゲートする。
+型安全なパターンマッチにより具体型へのアクセスが可能（ダウンキャスト不要）。
 
-利用可能なノード型（各サブモジュールで定義）：
+利用可能なバリアント（各サブモジュールで定義）：
 - `AudioInputNode` (io.rs): オーディオ入力デバイスノード（出力ピン = チャンネル数、スペクトラム表示統合）
 - `AudioOutputNode` (io.rs): オーディオ出力デバイスノード（入力ピン = チャンネル数、スペクトラム表示統合）
 - `GainNode` (effects.rs): ゲインエフェクトノード（1入力1出力、ゲインスライダー付き）
@@ -142,10 +123,9 @@ impl<T: NodeBase + AudioInputPort + AudioOutputPort + NodeUI> NodeBehavior for T
 - `WsolaPitchShiftNode` (effects.rs): WSOLAピッチシフター（1入力1出力、波形類似度ベースのピッチシフト、-12〜+12半音）
 - `GraphicEqNode` (effects.rs): グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
 
-ファクトリ関数でノードを生成（nodes/mod.rsで定義）：
-- `new_audio_input(device_name, channels)`, `new_audio_output(device_name, channels)`: チャンネル数を指定して生成
-- `new_gain()`, `new_add()`, `new_multiply()`, `new_filter()`, `new_spectrum_analyzer()`
-- `new_compressor()`, `new_wsola_pitch_shift()`, `new_graphic_eq()`
+ノード生成は直接enumバリアントを構築：
+- `AudioNode::AudioInput(AudioInputNode::new(device_name, channels))`
+- `AudioNode::Gain(GainNode::new())` 等
 
 ### AudioConfig (audio.rs)
 オーディオストリームの設定を保持する構造体。
@@ -200,13 +180,12 @@ egui-snarlのSnarlViewerトレイトを実装。
 
 新しいノードタイプを追加する際は：
 1. 構造体を定義（`buffers: NodeBuffers`フィールドを含む）
-2. 以下の4トレイトを実装：
-   - `NodeBase`: `node_type()`, `title()`, `as_any()`, `as_any_mut()` （`impl_as_any!()`マクロ使用可）
+2. 以下の3トレイトを実装：
    - `AudioInputPort`: 入力ポートがある場合は実装（`impl_input_port_nb!()`マクロ使用可）
    - `AudioOutputPort`: 出力ポートがある場合は実装（`impl_single_output_port_nb!()`マクロ使用可）
    - `NodeUI`: `is_active()`, `set_active()`, `show_body()`
-3. `NodeType` enumにバリアントを追加
-4. ファクトリ関数を追加（`new_xxx() -> AudioNode`）
+3. `AudioNode` enumにバリアントを追加し、`delegate!`マクロのmatchアームとアクセサメソッドを追加
+4. `impl AudioNode`の`title()`に対応するタイトル文字列を追加
 5. `viewer.rs`の`show_graph_menu`を更新（ノード追加メニュー）
 6. `project.rs`のシリアライズ/デシリアライズを更新
 7. 必要に応じて`graph.rs`と`effect_processor.rs`を更新

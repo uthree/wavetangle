@@ -5,8 +5,8 @@ use egui_snarl::ui::{PinInfo, SnarlPin, SnarlViewer};
 use egui_snarl::{InPin, NodeId, OutPin, Snarl};
 
 use crate::nodes::{
-    new_add, new_audio_input, new_audio_output, new_compressor, new_filter, new_gain,
-    new_graphic_eq, new_multiply, new_spectrum_analyzer, new_wsola_pitch_shift, AudioNode, PinType,
+    AddNode, AudioInputNode, AudioNode, AudioOutputNode, CompressorNode, FilterNode, GainNode,
+    GraphicEqNode, MultiplyNode, PinType, SpectrumAnalyzerNode, WsolaPitchShiftNode,
 };
 
 /// ピンタイプに応じた色を取得
@@ -173,7 +173,13 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
                 for device_name in &self.input_devices.clone() {
                     let channels = self.get_input_channels(device_name);
                     if ui.button(device_name).clicked() {
-                        snarl.insert_node(pos, new_audio_input(device_name.clone(), channels));
+                        snarl.insert_node(
+                            pos,
+                            AudioNode::AudioInput(AudioInputNode::new(
+                                device_name.clone(),
+                                channels,
+                            )),
+                        );
                         ui.close();
                     }
                 }
@@ -187,7 +193,13 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
                 for device_name in &self.output_devices.clone() {
                     let channels = self.get_output_channels(device_name);
                     if ui.button(device_name).clicked() {
-                        snarl.insert_node(pos, new_audio_output(device_name.clone(), channels));
+                        snarl.insert_node(
+                            pos,
+                            AudioNode::AudioOutput(AudioOutputNode::new(
+                                device_name.clone(),
+                                channels,
+                            )),
+                        );
                         ui.close();
                     }
                 }
@@ -196,41 +208,47 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
 
         ui.menu_button("Effect", |ui| {
             if ui.button("Gain").clicked() {
-                snarl.insert_node(pos, new_gain());
+                snarl.insert_node(pos, AudioNode::Gain(GainNode::new()));
                 ui.close();
             }
             if ui.button("Filter").clicked() {
-                snarl.insert_node(pos, new_filter());
+                snarl.insert_node(pos, AudioNode::Filter(FilterNode::new()));
                 ui.close();
             }
             if ui.button("Compressor").clicked() {
-                snarl.insert_node(pos, new_compressor());
+                snarl.insert_node(pos, AudioNode::Compressor(CompressorNode::new()));
                 ui.close();
             }
             if ui.button("WSOLA Pitch Shift").clicked() {
-                snarl.insert_node(pos, new_wsola_pitch_shift());
+                snarl.insert_node(
+                    pos,
+                    AudioNode::WsolaPitchShift(WsolaPitchShiftNode::new()),
+                );
                 ui.close();
             }
             if ui.button("Graphic EQ").clicked() {
-                snarl.insert_node(pos, new_graphic_eq());
+                snarl.insert_node(pos, AudioNode::GraphicEq(GraphicEqNode::new()));
                 ui.close();
             }
         });
 
         ui.menu_button("Math", |ui| {
             if ui.button("Add").clicked() {
-                snarl.insert_node(pos, new_add());
+                snarl.insert_node(pos, AudioNode::Add(AddNode::new()));
                 ui.close();
             }
             if ui.button("Multiply").clicked() {
-                snarl.insert_node(pos, new_multiply());
+                snarl.insert_node(pos, AudioNode::Multiply(MultiplyNode::new()));
                 ui.close();
             }
         });
 
         ui.menu_button("Analysis", |ui| {
             if ui.button("Spectrum Analyzer").clicked() {
-                snarl.insert_node(pos, new_spectrum_analyzer());
+                snarl.insert_node(
+                    pos,
+                    AudioNode::SpectrumAnalyzer(SpectrumAnalyzerNode::new()),
+                );
                 ui.close();
             }
         });

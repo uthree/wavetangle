@@ -1,8 +1,8 @@
 use egui::Ui;
 
 use super::{
-    impl_as_any, impl_input_port_nb, impl_single_output_port_nb, AudioInputPort, AudioOutputPort,
-    ChannelBuffer, NodeBase, NodeBuffers, NodeType, NodeUI, NodeUIContext, PinType,
+    impl_input_port_nb, impl_single_output_port_nb, AudioInputPort, AudioOutputPort,
+    ChannelBuffer, NodeBuffers, NodeUI, NodeUIContext, PinType,
 };
 
 // ============================================================================
@@ -33,18 +33,6 @@ impl Default for AddNode {
 }
 
 // AddNodeのトレイト実装（2入力1出力、マクロ使用）
-impl NodeBase for AddNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::Add
-    }
-
-    fn title(&self) -> &str {
-        "Add"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(AddNode, ["A", "B"]);
 impl_single_output_port_nb!(AddNode);
 
@@ -92,18 +80,6 @@ impl Default for MultiplyNode {
 }
 
 // MultiplyNodeのトレイト実装（2入力1出力、マクロ使用）
-impl NodeBase for MultiplyNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::Multiply
-    }
-
-    fn title(&self) -> &str {
-        "Multiply"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(MultiplyNode, ["A", "B"]);
 impl_single_output_port_nb!(MultiplyNode);
 

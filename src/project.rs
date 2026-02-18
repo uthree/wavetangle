@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::EqPoint;
 use crate::nodes::{
     AddNode, AudioInputNode, AudioNode, AudioOutputNode, CompressorNode, FilterNode, FilterType,
-    GainNode, GraphicEqNode, MultiplyNode, NodeType, SpectrumAnalyzerNode, WsolaPitchShiftNode,
+    GainNode, GraphicEqNode, MultiplyNode, SpectrumAnalyzerNode, WsolaPitchShiftNode,
 };
 
 /// プロジェクトファイルのバージョン
@@ -175,66 +175,45 @@ impl ProjectFile {
         for (node_id, node) in snarl.node_ids() {
             let index = nodes.len();
             node_id_to_index.insert(node_id, index);
-            let saved_node = match node.node_type() {
-                NodeType::AudioInput => {
-                    let n = node.as_any().downcast_ref::<AudioInputNode>().unwrap();
-                    SavedNode::AudioInput {
-                        device_name: n.device_name.clone(),
-                        channels: n.channels(),
-                        show_spectrum: n.spectrum_display.enabled,
-                    }
-                }
-                NodeType::AudioOutput => {
-                    let n = node.as_any().downcast_ref::<AudioOutputNode>().unwrap();
-                    SavedNode::AudioOutput {
-                        device_name: n.device_name.clone(),
-                        channels: n.channels(),
-                        show_spectrum: n.spectrum_display.enabled,
-                    }
-                }
-                NodeType::Gain => {
-                    let n = node.as_any().downcast_ref::<GainNode>().unwrap();
-                    SavedNode::Gain { gain: n.gain }
-                }
-                NodeType::Add => SavedNode::Add,
-                NodeType::Multiply => SavedNode::Multiply,
-                NodeType::Filter => {
-                    let n = node.as_any().downcast_ref::<FilterNode>().unwrap();
-                    SavedNode::Filter {
-                        filter_type: n.filter_type.into(),
-                        cutoff: n.cutoff,
-                        resonance: n.resonance,
-                    }
-                }
-                NodeType::SpectrumAnalyzer => SavedNode::SpectrumAnalyzer,
-                NodeType::Compressor => {
-                    let n = node.as_any().downcast_ref::<CompressorNode>().unwrap();
-                    SavedNode::Compressor {
-                        threshold: n.threshold,
-                        ratio: n.ratio,
-                        attack: n.attack,
-                        release: n.release,
-                        makeup_gain: n.makeup_gain,
-                    }
-                }
-                NodeType::WsolaPitchShift => {
-                    let n = node.as_any().downcast_ref::<WsolaPitchShiftNode>().unwrap();
-                    SavedNode::WsolaPitchShift {
-                        semitones: n.semitones,
-                        grain_size: n.grain_size,
-                        num_grains: n.num_grains,
-                        phase_alignment_enabled: n.phase_alignment_enabled,
-                        search_range_ratio: n.search_range_ratio,
-                        correlation_length_ratio: n.correlation_length_ratio,
-                    }
-                }
-                NodeType::GraphicEq => {
-                    let n = node.as_any().downcast_ref::<GraphicEqNode>().unwrap();
-                    SavedNode::GraphicEq {
-                        eq_points: n.eq_points.iter().map(SavedEqPoint::from).collect(),
-                        show_spectrum: n.show_spectrum,
-                    }
-                }
+            let saved_node = match node {
+                AudioNode::AudioInput(n) => SavedNode::AudioInput {
+                    device_name: n.device_name.clone(),
+                    channels: n.channels(),
+                    show_spectrum: n.spectrum_display.enabled,
+                },
+                AudioNode::AudioOutput(n) => SavedNode::AudioOutput {
+                    device_name: n.device_name.clone(),
+                    channels: n.channels(),
+                    show_spectrum: n.spectrum_display.enabled,
+                },
+                AudioNode::Gain(n) => SavedNode::Gain { gain: n.gain },
+                AudioNode::Add(_) => SavedNode::Add,
+                AudioNode::Multiply(_) => SavedNode::Multiply,
+                AudioNode::Filter(n) => SavedNode::Filter {
+                    filter_type: n.filter_type.into(),
+                    cutoff: n.cutoff,
+                    resonance: n.resonance,
+                },
+                AudioNode::SpectrumAnalyzer(_) => SavedNode::SpectrumAnalyzer,
+                AudioNode::Compressor(n) => SavedNode::Compressor {
+                    threshold: n.threshold,
+                    ratio: n.ratio,
+                    attack: n.attack,
+                    release: n.release,
+                    makeup_gain: n.makeup_gain,
+                },
+                AudioNode::WsolaPitchShift(n) => SavedNode::WsolaPitchShift {
+                    semitones: n.semitones,
+                    grain_size: n.grain_size,
+                    num_grains: n.num_grains,
+                    phase_alignment_enabled: n.phase_alignment_enabled,
+                    search_range_ratio: n.search_range_ratio,
+                    correlation_length_ratio: n.correlation_length_ratio,
+                },
+                AudioNode::GraphicEq(n) => SavedNode::GraphicEq {
+                    eq_points: n.eq_points.iter().map(SavedEqPoint::from).collect(),
+                    show_spectrum: n.show_spectrum,
+                },
             };
 
             nodes.push(saved_node);
@@ -292,7 +271,7 @@ impl ProjectFile {
                 } => {
                     let mut node = AudioInputNode::new(device_name.clone(), *channels);
                     node.spectrum_display.enabled = *show_spectrum;
-                    Box::new(node)
+                    AudioNode::AudioInput(node)
                 }
                 SavedNode::AudioOutput {
                     device_name,
@@ -301,15 +280,15 @@ impl ProjectFile {
                 } => {
                     let mut node = AudioOutputNode::new(device_name.clone(), *channels);
                     node.spectrum_display.enabled = *show_spectrum;
-                    Box::new(node)
+                    AudioNode::AudioOutput(node)
                 }
                 SavedNode::Gain { gain } => {
                     let mut node = GainNode::new();
                     node.gain = *gain;
-                    Box::new(node)
+                    AudioNode::Gain(node)
                 }
-                SavedNode::Add => Box::new(AddNode::new()),
-                SavedNode::Multiply => Box::new(MultiplyNode::new()),
+                SavedNode::Add => AudioNode::Add(AddNode::new()),
+                SavedNode::Multiply => AudioNode::Multiply(MultiplyNode::new()),
                 SavedNode::Filter {
                     filter_type,
                     cutoff,
@@ -319,9 +298,11 @@ impl ProjectFile {
                     node.filter_type = (*filter_type).into();
                     node.cutoff = *cutoff;
                     node.resonance = *resonance;
-                    Box::new(node)
+                    AudioNode::Filter(node)
                 }
-                SavedNode::SpectrumAnalyzer => Box::new(SpectrumAnalyzerNode::new()),
+                SavedNode::SpectrumAnalyzer => {
+                    AudioNode::SpectrumAnalyzer(SpectrumAnalyzerNode::new())
+                }
                 SavedNode::Compressor {
                     threshold,
                     ratio,
@@ -335,7 +316,7 @@ impl ProjectFile {
                     node.attack = *attack;
                     node.release = *release;
                     node.makeup_gain = *makeup_gain;
-                    Box::new(node)
+                    AudioNode::Compressor(node)
                 }
                 SavedNode::WsolaPitchShift {
                     semitones,
@@ -362,7 +343,7 @@ impl ProjectFile {
                             correlation_length_ratio: *correlation_length_ratio,
                         });
                     }
-                    Box::new(node)
+                    AudioNode::WsolaPitchShift(node)
                 }
                 SavedNode::GraphicEq {
                     eq_points,
@@ -373,7 +354,7 @@ impl ProjectFile {
                     node.show_spectrum = *show_spectrum;
                     // EQカーブを更新
                     node.graphic_eq.lock().update_curve(&node.eq_points);
-                    Box::new(node)
+                    AudioNode::GraphicEq(node)
                 }
             };
 
@@ -417,7 +398,7 @@ impl ProjectFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodes::{AudioInputPort, AudioOutputPort};
+
 
     #[test]
     fn test_saved_node_serialization_with_channels() {
@@ -490,8 +471,14 @@ mod tests {
         let input_node = AudioInputNode::new("Input Device".to_string(), 1);
         let output_node = AudioOutputNode::new("Output Device".to_string(), 2);
 
-        let input_id = snarl.insert_node(egui::Pos2::new(100.0, 100.0), Box::new(input_node));
-        let output_id = snarl.insert_node(egui::Pos2::new(300.0, 100.0), Box::new(output_node));
+        let input_id = snarl.insert_node(
+            egui::Pos2::new(100.0, 100.0),
+            AudioNode::AudioInput(input_node),
+        );
+        let output_id = snarl.insert_node(
+            egui::Pos2::new(300.0, 100.0),
+            AudioNode::AudioOutput(output_node),
+        );
 
         // 接続を追加
         snarl.connect(
@@ -520,16 +507,14 @@ mod tests {
 
         // チャンネル数を確認
         for (_, node) in restored_snarl.node_ids() {
-            match node.node_type() {
-                NodeType::AudioInput => {
-                    let n = node.as_any().downcast_ref::<AudioInputNode>().unwrap();
+            match node {
+                AudioNode::AudioInput(n) => {
                     assert_eq!(n.channels(), 1);
-                    assert_eq!(n.output_count(), 1);
+                    assert_eq!(n.buffers.output_count(), 1);
                 }
-                NodeType::AudioOutput => {
-                    let n = node.as_any().downcast_ref::<AudioOutputNode>().unwrap();
+                AudioNode::AudioOutput(n) => {
                     assert_eq!(n.channels(), 2);
-                    assert_eq!(n.input_count(), 2);
+                    assert_eq!(n.buffers.input_count(), 2);
                 }
                 _ => panic!("Unexpected node type"),
             }

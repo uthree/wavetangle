@@ -5,8 +5,8 @@ use egui_plot::{Line, Plot, PlotPoints, Points};
 use parking_lot::Mutex;
 
 use super::{
-    impl_as_any, impl_input_port_nb, impl_single_output_port_nb, interpolate_eq_gain,
-    AudioInputPort, AudioOutputPort, ChannelBuffer, NodeBase, NodeBuffers, NodeType, NodeUI,
+    impl_input_port_nb, impl_single_output_port_nb, interpolate_eq_gain,
+    AudioInputPort, AudioOutputPort, ChannelBuffer, NodeBuffers, NodeUI,
     NodeUIContext, PinType, EQ_FFT_SIZE,
 };
 
@@ -42,18 +42,6 @@ impl Default for GainNode {
 }
 
 // GainNodeのトレイト実装（NodeBuffers対応マクロを使用）
-impl NodeBase for GainNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::Gain
-    }
-
-    fn title(&self) -> &str {
-        "Gain"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(GainNode, ["In"]);
 impl_single_output_port_nb!(GainNode);
 
@@ -129,18 +117,6 @@ impl Default for FilterNode {
 }
 
 // FilterNodeのトレイト実装（NodeBuffers対応マクロを使用）
-impl NodeBase for FilterNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::Filter
-    }
-
-    fn title(&self) -> &str {
-        "Filter"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(FilterNode, ["In"]);
 impl_single_output_port_nb!(FilterNode);
 
@@ -227,18 +203,6 @@ impl Default for CompressorNode {
 }
 
 // CompressorNodeのトレイト実装（NodeBuffers対応マクロを使用）
-impl NodeBase for CompressorNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::Compressor
-    }
-
-    fn title(&self) -> &str {
-        "Compressor"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(CompressorNode, ["In"]);
 impl_single_output_port_nb!(CompressorNode);
 
@@ -342,18 +306,6 @@ impl Default for WsolaPitchShiftNode {
 }
 
 // WsolaPitchShiftNodeのトレイト実装（NodeBuffers対応マクロを使用）
-impl NodeBase for WsolaPitchShiftNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::WsolaPitchShift
-    }
-
-    fn title(&self) -> &str {
-        "WSOLA Pitch Shift"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(WsolaPitchShiftNode, ["In"]);
 impl_single_output_port_nb!(WsolaPitchShiftNode);
 
@@ -505,18 +457,6 @@ impl Default for GraphicEqNode {
 }
 
 // GraphicEqNodeのトレイト実装（NodeBuffers対応マクロを使用）
-impl NodeBase for GraphicEqNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::GraphicEq
-    }
-
-    fn title(&self) -> &str {
-        "Graphic EQ"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(GraphicEqNode, ["In"]);
 impl_single_output_port_nb!(GraphicEqNode);
 

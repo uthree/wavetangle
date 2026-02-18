@@ -1,8 +1,8 @@
 use egui::Ui;
 
 use super::{
-    channel_name, impl_as_any, AudioInputPort, AudioOutputPort, ChannelBuffer, NodeBase,
-    NodeBuffers, NodeType, NodeUI, NodeUIContext, PinType, SpectrumDisplay, FFT_SIZE,
+    channel_name, AudioInputPort, AudioOutputPort, ChannelBuffer,
+    NodeBuffers, NodeUI, NodeUIContext, PinType, SpectrumDisplay, FFT_SIZE,
 };
 
 // ============================================================================
@@ -46,17 +46,6 @@ impl AudioInputNode {
 // 出力専用ノード: NodeBase + AudioOutputPort + NodeUI
 // AudioInputPortはデフォルト実装を使用（入力ピンなし）
 
-impl NodeBase for AudioInputNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::AudioInput
-    }
-
-    fn title(&self) -> &str {
-        "Audio Input"
-    }
-
-    impl_as_any!();
-}
 
 /// AudioInputNodeは入力ピンを持たない（デフォルト実装を使用）
 impl AudioInputPort for AudioInputNode {}
@@ -176,17 +165,6 @@ impl AudioOutputNode {
 // 入力専用ノード: NodeBase + AudioInputPort + NodeUI
 // AudioOutputPortは内部バッファアクセス用にchannel_bufferとchannelsのみ実装
 
-impl NodeBase for AudioOutputNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::AudioOutput
-    }
-
-    fn title(&self) -> &str {
-        "Audio Output"
-    }
-
-    impl_as_any!();
-}
 
 /// AudioOutputNodeは入力ピンを持つ
 impl AudioInputPort for AudioOutputNode {

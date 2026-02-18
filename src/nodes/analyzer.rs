@@ -5,8 +5,8 @@ use egui_plot::{Bar, BarChart, Plot};
 use parking_lot::Mutex;
 
 use super::{
-    hsv_to_rgb, impl_as_any, impl_input_port_nb, impl_single_output_port_nb, AudioInputPort,
-    AudioOutputPort, ChannelBuffer, NodeBase, NodeBuffers, NodeType, NodeUI, NodeUIContext,
+    hsv_to_rgb, impl_input_port_nb, impl_single_output_port_nb, AudioInputPort,
+    AudioOutputPort, ChannelBuffer, NodeBuffers, NodeUI, NodeUIContext,
     PinType, FFT_SIZE,
 };
 
@@ -54,18 +54,6 @@ impl Default for SpectrumAnalyzerNode {
 }
 
 // SpectrumAnalyzerNodeのトレイト実装（1入力1出力、NodeBuffers対応マクロを使用）
-impl NodeBase for SpectrumAnalyzerNode {
-    fn node_type(&self) -> NodeType {
-        NodeType::SpectrumAnalyzer
-    }
-
-    fn title(&self) -> &str {
-        "Spectrum"
-    }
-
-    impl_as_any!();
-}
-
 impl_input_port_nb!(SpectrumAnalyzerNode, ["In"]);
 impl_single_output_port_nb!(SpectrumAnalyzerNode);
 

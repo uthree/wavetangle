@@ -13,7 +13,7 @@ src/
 ├── nodes/               # オーディオノードの定義
 │   ├── mod.rs           # AudioNode enum、共通型、トレイト、テスト
 │   ├── io.rs            # AudioInputNode, AudioOutputNode
-│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, GraphicEqNode
+│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, TdPsolaPitchShiftNode, GraphicEqNode
 │   ├── math.rs          # AddNode, MultiplyNode
 │   └── analyzer.rs      # SpectrumAnalyzerNode
 ├── dsp/                 # DSPアルゴリズム（モジュール分割）
@@ -24,7 +24,8 @@ src/
 │   ├── pitch_shifter.rs # WSOLAピッチシフター
 │   ├── graphic_eq.rs    # グラフィックEQ
 │   ├── interpolation.rs # 補間アルゴリズム（Interpolator trait）
-│   └── yin.rs           # YINピッチ検出（将来の利用のため残留）
+│   ├── td_psola.rs      # TD-PSOLAピッチシフター（ピッチ・フォルマント独立制御）
+│   └── yin.rs           # YINピッチ検出（TD-PSOLAで使用）
 ├── audio.rs             # cpalを使用したオーディオシステム
 ├── effect_processor.rs  # エフェクト処理専用スレッド
 ├── graph.rs             # オーディオグラフの処理ロジック
@@ -121,6 +122,7 @@ UI描画時に必要なコンテキストを保持する構造体：
 - `SpectrumAnalyzerNode` (analyzer.rs): スペクトラムアナライザー（1入力1出力、FFTでスペクトラム表示）
 - `CompressorNode` (effects.rs): コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
 - `WsolaPitchShiftNode` (effects.rs): WSOLAピッチシフター（1入力1出力、波形類似度ベースのピッチシフト、-12〜+12半音）
+- `TdPsolaPitchShiftNode` (effects.rs): TD-PSOLAピッチシフター（1入力1出力、ピッチとフォルマントを独立に制御、-24〜+24半音、YINピッチ検出使用）
 - `GraphicEqNode` (effects.rs): グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
 
 ノード生成は直接enumバリアントを構築：
@@ -156,7 +158,7 @@ cpalを使用したオーディオデバイス管理システム。
   - `source_buffers`: 接続元ノードの出力バッファ（データコピー元）
   - `input_buffers`: ノード自身の入力バッファ（データコピー先、処理用）
   - `output_buffer`: ノード自身の出力バッファ
-- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, WsolaPitchShift, GraphicEq, PassThrough）
+- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, WsolaPitchShift, TdPsolaPitchShift, GraphicEq, PassThrough）
 - 処理フロー（スナップショット方式）:
   1. **Phase 1 - スナップショット作成**: 全ソースバッファから`read()`でデータを読み取り、スナップショットを作成
      - 同じソースバッファを複数ノードが参照していても、データは一度だけ読み取る
@@ -258,14 +260,22 @@ egui-snarlのSnarlViewerトレイトを実装。
 - `LinearInterpolator`: 線形補間（2点間を直線で補間）
 - `CubicInterpolator`: 3次補間（Catmull-Romスプライン、将来の拡張用）
 
+### TD-PSOLAピッチシフター (td_psola.rs)
+- `TdPsolaPitchShifter`: TD-PSOLAベースのピッチ・フォルマント独立制御ピッチシフター
+  - YINピッチ検出を使用してピッチ周期を特定
+  - ピッチシフト: 入出力読み取り速度の比率で制御（-24〜+24半音）
+  - フォルマントシフト: ピッチ周期内のリサンプリングで制御（-24〜+24半音）
+  - Hann窓によるオーバーラップ・アド合成
+  - リングバッファベースのリアルタイム処理
+  - 初期レイテンシ: 最大周期の4倍
+
 ### YINピッチ検出 (yin.rs)
-- `YinPitchDetector`: YINアルゴリズムによるピッチ検出
+- `YinPitchDetector`: YINアルゴリズムによるピッチ検出（TD-PSOLAで使用）
   - De Cheveigné & Kawahara (2002) の論文に基づく実装
   - 差分関数と累積平均正規化差分関数（CMNDF）を計算
   - 放物線補間によるサブサンプル精度の周期検出
   - 無声音時は前回のピッチを継続（フォールバック機能）
   - 検出周波数範囲: 50Hz〜1000Hz（設定可能）
-  - 現在は将来の利用のために残されている
 
 ## プロジェクトファイル (project.rs)
 

@@ -265,6 +265,14 @@ impl AudioGraphProcessor {
                 },
                 1,
             ),
+            AudioNode::TdPsolaPitchShift(td_psola_node) => (
+                EffectNodeType::TdPsolaPitchShift {
+                    pitch_shift: td_psola_node.pitch_shift,
+                    formant_shift: td_psola_node.formant_shift,
+                    td_psola: td_psola_node.td_psola.clone(),
+                },
+                1,
+            ),
             AudioNode::GraphicEq(eq_node) => (
                 EffectNodeType::GraphicEq {
                     graphic_eq: eq_node.graphic_eq.clone(),

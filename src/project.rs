@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::EqPoint;
 use crate::nodes::{
     AddNode, AudioInputNode, AudioNode, AudioOutputNode, CompressorNode, FilterNode, FilterType,
-    GainNode, GraphicEqNode, MultiplyNode, SpectrumAnalyzerNode, WsolaPitchShiftNode,
+    GainNode, GraphicEqNode, MultiplyNode, SpectrumAnalyzerNode, TdPsolaPitchShiftNode,
+    WsolaPitchShiftNode,
 };
 
 /// プロジェクトファイルのバージョン
@@ -94,6 +95,11 @@ pub enum SavedNode {
         search_range_ratio: f32,
         #[serde(default = "default_correlation_length_ratio")]
         correlation_length_ratio: f32,
+    },
+    TdPsolaPitchShift {
+        pitch_shift: f32,
+        formant_shift: f32,
+        yin_threshold: f32,
     },
     GraphicEq {
         eq_points: Vec<SavedEqPoint>,
@@ -209,6 +215,11 @@ impl ProjectFile {
                     phase_alignment_enabled: n.phase_alignment_enabled,
                     search_range_ratio: n.search_range_ratio,
                     correlation_length_ratio: n.correlation_length_ratio,
+                },
+                AudioNode::TdPsolaPitchShift(n) => SavedNode::TdPsolaPitchShift {
+                    pitch_shift: n.pitch_shift,
+                    formant_shift: n.formant_shift,
+                    yin_threshold: n.yin_threshold,
                 },
                 AudioNode::GraphicEq(n) => SavedNode::GraphicEq {
                     eq_points: n.eq_points.iter().map(SavedEqPoint::from).collect(),
@@ -344,6 +355,20 @@ impl ProjectFile {
                         });
                     }
                     AudioNode::WsolaPitchShift(node)
+                }
+                SavedNode::TdPsolaPitchShift {
+                    pitch_shift,
+                    formant_shift,
+                    yin_threshold,
+                } => {
+                    let mut node = TdPsolaPitchShiftNode::new();
+                    node.pitch_shift = *pitch_shift;
+                    node.formant_shift = *formant_shift;
+                    node.yin_threshold = *yin_threshold;
+                    if let Some(mut td_psola) = node.td_psola.try_lock() {
+                        td_psola.set_yin_threshold(*yin_threshold);
+                    }
+                    AudioNode::TdPsolaPitchShift(node)
                 }
                 SavedNode::GraphicEq {
                     eq_points,

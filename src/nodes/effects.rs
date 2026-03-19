@@ -29,7 +29,7 @@ impl GainNode {
     pub fn new() -> Self {
         Self {
             gain: 1.0,
-            buffers: NodeBuffers::single_io(),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
         }
     }
@@ -103,7 +103,7 @@ impl FilterNode {
             filter_type: FilterType::Low,
             cutoff: 1000.0,
             resonance: 0.707,
-            buffers: NodeBuffers::single_io(),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
             biquad_state: Arc::new(Mutex::new(crate::dsp::BiquadState::new())),
         }
@@ -189,7 +189,7 @@ impl CompressorNode {
             attack: 10.0,
             release: 100.0,
             makeup_gain: 0.0,
-            buffers: NodeBuffers::single_io(),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
             compressor_state: Arc::new(Mutex::new(crate::dsp::CompressorState::new())),
         }
@@ -292,7 +292,7 @@ impl WsolaPitchShiftNode {
             phase_alignment_enabled: default_params.enabled,
             search_range_ratio: default_params.search_range_ratio,
             correlation_length_ratio: default_params.correlation_length_ratio,
-            buffers: NodeBuffers::single_io(),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
             pitch_shifter: Arc::new(Mutex::new(crate::dsp::PitchShifter::new(44100.0))),
         }
@@ -432,7 +432,7 @@ impl WorldVocoderNode {
         Self {
             pitch_semitones: 0.0,
             formant_semitones: 0.0,
-            buffers: NodeBuffers::single_io(),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
             vocoder: Arc::new(Mutex::new(crate::dsp::WorldVocoder::new(48000.0))),
         }
@@ -533,7 +533,7 @@ impl GraphicEqNode {
         ];
         Self {
             eq_points,
-            buffers: NodeBuffers::single_io(),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
             graphic_eq: Arc::new(Mutex::new(crate::dsp::GraphicEq::new(44100.0))),
             show_spectrum: true,

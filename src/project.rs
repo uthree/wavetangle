@@ -532,7 +532,7 @@ mod tests {
                 }
                 AudioNode::AudioOutput(n) => {
                     assert_eq!(n.channels(), 2);
-                    assert_eq!(n.buffers.input_count(), 2);
+                    assert_eq!(n.buffers.output_count(), 2);
                 }
                 _ => panic!("Unexpected node type"),
             }

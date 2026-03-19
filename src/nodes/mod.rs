@@ -316,59 +316,30 @@ pub fn new_channel_buffer(capacity: usize) -> ChannelBuffer {
 // ============================================================================
 
 /// ノードのバッファ管理を統一する構造体
-/// 入出力ノードと中間ノードで共通のインターフェースを提供する
+/// すべてのノードは出力バッファのみを持つ。
+/// エフェクトプロセッサーが上流の出力バッファから直接読み取るため、入力バッファは不要。
 #[derive(Clone)]
 pub struct NodeBuffers {
-    /// 入力バッファ（入力ピンごとに1つ）
-    pub input_buffers: Vec<ChannelBuffer>,
     /// 出力バッファ（出力ピンごとに1つ）
     pub output_buffers: Vec<ChannelBuffer>,
 }
 
 impl NodeBuffers {
-    /// 1入力1出力ノード用（GainNode, FilterNode等）
-    pub fn single_io() -> Self {
+    /// 1出力ノード用（エフェクトノード共通）
+    pub fn single_output() -> Self {
         Self {
-            input_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
             output_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
         }
     }
 
-    /// N入力1出力ノード用（AddNode, MultiplyNode等）
-    pub fn multi_input(input_count: usize) -> Self {
-        Self {
-            input_buffers: (0..input_count)
-                .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
-                .collect(),
-            output_buffers: vec![new_channel_buffer(DEFAULT_RING_BUFFER_SIZE)],
-        }
-    }
-
-    /// マルチチャンネル入力専用（AudioOutputNode用）
-    pub fn input_only(channels: u16) -> Self {
+    /// マルチチャンネル出力ノード用（AudioInputNode, AudioOutputNode等）
+    pub fn multi_output(channels: u16) -> Self {
         let channels = channels.max(1);
         Self {
-            input_buffers: (0..channels)
-                .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
-                .collect(),
-            output_buffers: Vec::new(),
-        }
-    }
-
-    /// マルチチャンネル出力専用（AudioInputNode用）
-    pub fn output_only(channels: u16) -> Self {
-        let channels = channels.max(1);
-        Self {
-            input_buffers: Vec::new(),
             output_buffers: (0..channels)
                 .map(|_| new_channel_buffer(DEFAULT_RING_BUFFER_SIZE))
                 .collect(),
         }
-    }
-
-    /// 入力バッファ数
-    pub fn input_count(&self) -> usize {
-        self.input_buffers.len()
     }
 
     /// 出力バッファ数
@@ -376,27 +347,9 @@ impl NodeBuffers {
         self.output_buffers.len()
     }
 
-    /// 入力バッファを取得
-    pub fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.input_buffers.get(index).cloned()
-    }
-
     /// 出力バッファを取得
     pub fn output_buffer(&self, index: usize) -> Option<ChannelBuffer> {
         self.output_buffers.get(index).cloned()
-    }
-
-    /// 入力バッファ数のリサイズ
-    pub fn resize_inputs(&mut self, count: usize) {
-        let old_len = self.input_buffers.len();
-        if count > old_len {
-            for _ in old_len..count {
-                self.input_buffers
-                    .push(new_channel_buffer(DEFAULT_RING_BUFFER_SIZE));
-            }
-        } else {
-            self.input_buffers.truncate(count);
-        }
     }
 
     /// 出力バッファ数のリサイズ
@@ -442,11 +395,6 @@ pub trait AudioInputPort {
 
     /// 入力ピンの名前
     fn input_pin_name(&self, _index: usize) -> Option<String> {
-        None
-    }
-
-    /// 指定入力ピンのバッファを取得
-    fn input_buffer(&self, _index: usize) -> Option<ChannelBuffer> {
         None
     }
 }
@@ -530,10 +478,6 @@ macro_rules! impl_input_port_nb {
             fn input_pin_name(&self, index: usize) -> Option<String> {
                 const NAMES: &[&str] = &[$($name),+];
                 NAMES.get(index).map(|s| s.to_string())
-            }
-
-            fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-                self.buffers.input_buffer(index)
             }
         }
     };
@@ -664,10 +608,6 @@ impl AudioNode {
 
     pub fn output_pin_name(&self, index: usize) -> Option<String> {
         delegate!(self, output_pin_name(index))
-    }
-
-    pub fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        delegate!(self, input_buffer(index))
     }
 
     pub fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
@@ -809,19 +749,19 @@ mod tests {
         // 1チャンネル（モノラル）
         let node = AudioOutputNode::new("test_device".to_string(), 1);
         assert_eq!(node.channels(), 1);
-        assert_eq!(node.buffers.input_buffers.len(), 1);
+        assert_eq!(node.buffers.output_buffers.len(), 1);
         assert_eq!(node.input_count(), 1);
 
         // 2チャンネル（ステレオ）
         let node = AudioOutputNode::new("test_device".to_string(), 2);
         assert_eq!(node.channels(), 2);
-        assert_eq!(node.buffers.input_buffers.len(), 2);
+        assert_eq!(node.buffers.output_buffers.len(), 2);
         assert_eq!(node.input_count(), 2);
 
         // 0チャンネルは1に補正される
         let node = AudioOutputNode::new("test_device".to_string(), 0);
         assert_eq!(node.channels(), 1);
-        assert_eq!(node.buffers.input_buffers.len(), 1);
+        assert_eq!(node.buffers.output_buffers.len(), 1);
         assert_eq!(node.input_count(), 1);
     }
 
@@ -851,13 +791,13 @@ mod tests {
         // チャンネル数を増やす
         node.resize_buffers(4);
         assert_eq!(node.channels(), 4);
-        assert_eq!(node.buffers.input_buffers.len(), 4);
+        assert_eq!(node.buffers.output_buffers.len(), 4);
         assert_eq!(node.input_count(), 4);
 
         // チャンネル数を減らす
         node.resize_buffers(1);
         assert_eq!(node.channels(), 1);
-        assert_eq!(node.buffers.input_buffers.len(), 1);
+        assert_eq!(node.buffers.output_buffers.len(), 1);
         assert_eq!(node.input_count(), 1);
     }
 
@@ -921,7 +861,6 @@ mod tests {
         assert_eq!(node.input_count(), 0);
         assert_eq!(node.input_pin_type(0), None);
         assert_eq!(node.input_pin_name(0), None);
-        assert!(node.input_buffer(0).is_none());
 
         // 出力ポートはチャンネル数に応じて存在
         assert_eq!(node.output_count(), 2);
@@ -987,9 +926,6 @@ mod tests {
         assert_eq!(add.input_pin_name(0).as_deref(), Some("A"));
         assert_eq!(add.input_pin_name(1).as_deref(), Some("B"));
         assert_eq!(add.output_pin_name(0).as_deref(), Some("Out"));
-        assert!(add.input_buffer(0).is_some());
-        assert!(add.input_buffer(1).is_some());
-        assert!(add.input_buffer(2).is_none());
 
         let multiply = MultiplyNode::new();
         assert_eq!(multiply.input_count(), 2);
@@ -1096,20 +1032,19 @@ mod tests {
 
     #[test]
     fn test_gain_processing_simulation() {
-        // GainNodeの処理をシミュレート
-        let gain_node = GainNode::new();
+        // 新アーキテクチャ: 上流の出力バッファから直接read()して処理
+        let source_buffer = super::new_channel_buffer(100);
         let gain_value = 0.5f32;
 
-        // 入力バッファにテストデータを書き込み
-        let input_buffer = gain_node.input_buffer(0).unwrap();
+        // ソースにテストデータを書き込み
         {
-            let mut buf = input_buffer.lock();
+            let mut buf = source_buffer.lock();
             buf.push(&[1.0, 0.5, -0.5, -1.0]);
         }
 
-        // ゲイン処理をシミュレート（EffectProcessorが行う処理）
+        // ソースバッファから直接読み取ってゲイン処理
         let processed: Vec<f32> = {
-            let buf = input_buffer.lock();
+            let buf = source_buffer.lock();
             buf.read(4).iter().map(|&s| s * gain_value).collect()
         };
 
@@ -1118,29 +1053,16 @@ mod tests {
 
     #[test]
     fn test_add_processing_simulation() {
-        // AddNodeの処理をシミュレート
-        let add_node = AddNode::new();
+        // 上流の2つの出力バッファから直接読み取って加算
+        let source_a = super::new_channel_buffer(100);
+        let source_b = super::new_channel_buffer(100);
 
-        // 入力A
-        let input_a = add_node.input_buffer(0).unwrap();
-        {
-            let mut buf = input_a.lock();
-            buf.push(&[1.0, 2.0, 3.0, 4.0]);
-        }
+        source_a.lock().push(&[1.0, 2.0, 3.0, 4.0]);
+        source_b.lock().push(&[0.5, 0.5, 0.5, 0.5]);
 
-        // 入力B
-        let input_b = add_node.input_buffer(1).unwrap();
-        {
-            let mut buf = input_b.lock();
-            buf.push(&[0.5, 0.5, 0.5, 0.5]);
-        }
-
-        // 加算処理をシミュレート
         let processed: Vec<f32> = {
-            let buf_a = input_a.lock();
-            let buf_b = input_b.lock();
-            let data_a = buf_a.read(4);
-            let data_b = buf_b.read(4);
+            let data_a = source_a.lock().read(4);
+            let data_b = source_b.lock().read(4);
             data_a
                 .iter()
                 .zip(data_b.iter())
@@ -1153,29 +1075,16 @@ mod tests {
 
     #[test]
     fn test_multiply_processing_simulation() {
-        // MultiplyNodeの処理をシミュレート（リングモジュレーション）
-        let multiply_node = MultiplyNode::new();
+        // 上流の2つの出力バッファから直接読み取って乗算
+        let source_a = super::new_channel_buffer(100);
+        let source_b = super::new_channel_buffer(100);
 
-        // 入力A（キャリア信号）
-        let input_a = multiply_node.input_buffer(0).unwrap();
-        {
-            let mut buf = input_a.lock();
-            buf.push(&[1.0, 0.5, -0.5, -1.0]);
-        }
+        source_a.lock().push(&[1.0, 0.5, -0.5, -1.0]);
+        source_b.lock().push(&[1.0, 1.0, 1.0, 0.5]);
 
-        // 入力B（モジュレータ信号）
-        let input_b = multiply_node.input_buffer(1).unwrap();
-        {
-            let mut buf = input_b.lock();
-            buf.push(&[1.0, 1.0, 1.0, 0.5]);
-        }
-
-        // 乗算処理をシミュレート
         let processed: Vec<f32> = {
-            let buf_a = input_a.lock();
-            let buf_b = input_b.lock();
-            let data_a = buf_a.read(4);
-            let data_b = buf_b.read(4);
+            let data_a = source_a.lock().read(4);
+            let data_b = source_b.lock().read(4);
             data_a
                 .iter()
                 .zip(data_b.iter())
@@ -1189,59 +1098,29 @@ mod tests {
     #[test]
     fn test_node_chain_simulation() {
         // ノードチェーン: Source -> Gain(0.5) -> Output
-        // 実際のEffectProcessorの処理フローをシミュレート
+        // 新アーキテクチャ: ソースから直接read()、処理後にノードの出力バッファへpush()
 
         let source_buffer = super::new_channel_buffer(100);
         let gain_node = GainNode::new();
-        let output_buffer = super::new_channel_buffer(100);
         let gain_value = 0.5f32;
 
-        // ソースにテストデータを書き込み（サイン波をシミュレート）
+        // ソースにテストデータを書き込み
         let test_signal: Vec<f32> = (0..64).map(|i| (i as f32 * 0.1).sin()).collect();
-        {
-            let mut buf = source_buffer.lock();
-            buf.push(&test_signal);
-        }
+        source_buffer.lock().push(&test_signal);
 
-        // Phase 1: スナップショット作成
-        let snapshot = {
-            let buf = source_buffer.lock();
-            buf.read(64)
-        };
+        // Phase 1: ソースバッファから直接読み取って処理
+        let input_data = source_buffer.lock().read(64);
+        let processed: Vec<f32> = input_data.iter().map(|&s| s * gain_value).collect();
 
-        // Phase 2: 処理（ソース -> Gain入力）
-        {
-            let input_buffer = gain_node.input_buffer(0).unwrap();
-            let mut buf = input_buffer.lock();
-            buf.push(&snapshot);
-        }
+        // 処理結果をGainNodeの出力バッファに書き込み
+        let output_buffer = gain_node.channel_buffer(0).unwrap();
+        output_buffer.lock().push(&processed);
 
-        // Gain処理
-        let processed: Vec<f32> = {
-            let input_buffer = gain_node.input_buffer(0).unwrap();
-            let buf = input_buffer.lock();
-            buf.read(64).iter().map(|&s| s * gain_value).collect()
-        };
-
-        // 出力バッファに書き込み
-        {
-            let mut buf = output_buffer.lock();
-            buf.push(&processed);
-        }
-
-        // Phase 3: 消費
-        {
-            let mut buf = source_buffer.lock();
-            buf.consume(64);
-        }
+        // Phase 2: ソースバッファからデータを消費
+        source_buffer.lock().consume(64);
 
         // 検証
-        let output_data = {
-            let buf = output_buffer.lock();
-            buf.read(64)
-        };
-
-        // 各サンプルが正しくゲイン処理されていることを確認
+        let output_data = output_buffer.lock().read(64);
         for (i, &sample) in output_data.iter().enumerate() {
             let expected = (i as f32 * 0.1).sin() * 0.5;
             assert!(

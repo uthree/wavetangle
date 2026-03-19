@@ -2,7 +2,7 @@
 //!
 //! リアルタイムオーディオレートでエフェクトノードを処理する専用スレッド
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -13,20 +13,14 @@ use parking_lot::Mutex;
 use crate::dsp::{BiquadCoeffs, CompressorParams};
 use crate::nodes::{ChannelBuffer, FilterType};
 
-/// ソースバッファのスナップショットを管理するための型
-/// キー: バッファのアドレス、値: (スナップショットデータ, 消費済みフラグ)
-type SourceSnapshot = HashMap<usize, (Vec<f32>, bool)>;
-
 /// 処理対象のエフェクトノード情報
 #[derive(Clone)]
 pub struct EffectNodeInfo {
     /// ノードタイプ
     pub node_type: EffectNodeType,
-    /// 接続されたソースノードの出力バッファ（データコピー元）
+    /// 接続されたソースノードの出力バッファ（データ読み取り元）
     pub source_buffers: Vec<ChannelBuffer>,
-    /// ノード自身の入力バッファ（データコピー先、処理用）
-    pub input_buffers: Vec<ChannelBuffer>,
-    /// 出力バッファへの参照
+    /// ノード自身の出力バッファ（処理結果の書き込み先）
     pub output_buffer: ChannelBuffer,
 }
 
@@ -71,8 +65,8 @@ pub enum EffectNodeType {
         formant_semitones: f32,
         vocoder: Arc<Mutex<crate::dsp::WorldVocoder>>,
     },
-    /// パススルー - データをそのまま出力にコピー（出力ノードへのルーティング用）
-    PassThrough,
+    /// データをそのまま出力にコピー（出力ノードへのルーティング用）
+    Copy,
 }
 
 /// エフェクトプロセッサー
@@ -136,90 +130,51 @@ impl EffectProcessor {
             while running.load(Ordering::SeqCst) {
                 let start = Instant::now();
 
-                // ノードを処理
                 let nodes_snapshot = nodes.lock().clone();
                 let sr = *sample_rate.lock();
 
-                // サンプルレートと処理間隔からブロックサイズを計算
-                // 48kHz, 2ms -> 96 samples
                 let base_block_size = ((sr * interval_ms as f32) / 1000.0).ceil() as usize;
-                let max_block_size = base_block_size * 8; // 最大8倍まで
+                let max_block_size = base_block_size * 8;
 
-                // 各ノードを順番に処理（トポロジカル順序で渡されていると仮定）
-                // 分岐時のデータ消費問題を防ぐため、スナップショット方式で処理
+                // 消費対象のソースバッファとサイズを追跡
+                let mut consumed: HashSet<usize> = HashSet::new();
+                let mut consume_list: Vec<(ChannelBuffer, usize)> = Vec::new();
 
-                // Phase 1: 全ソースバッファのスナップショットを作成
-                // 同じソースバッファを複数ノードが参照している場合でも
-                // データを一度だけ読み取り、共有する
-                let mut source_snapshots: SourceSnapshot = HashMap::new();
-
+                // Phase 1: 全ノードを順に処理（トポロジカル順序）
+                // read()は非破壊なので、同じバッファを複数ノードが安全に読み取れる
                 for node_info in &nodes_snapshot {
-                    for source in &node_info.source_buffers {
-                        let addr = Arc::as_ptr(source) as usize;
-                        if let std::collections::hash_map::Entry::Vacant(e) =
-                            source_snapshots.entry(addr)
-                        {
-                            let buf = source.lock();
-                            let available = buf.len().min(max_block_size);
-                            if available > 0 {
-                                let data = buf.read(available);
-                                e.insert((data, false));
-                            }
-                        }
-                    }
-                }
-
-                // Phase 2: 各ノードをスナップショットを使って処理
-                for node_info in &nodes_snapshot {
-                    // このノードのソースバッファの最小利用可能サンプル数を確認
                     let min_available = if node_info.source_buffers.is_empty() {
                         0
                     } else {
                         node_info
                             .source_buffers
                             .iter()
-                            .map(|buf| {
-                                let addr = Arc::as_ptr(buf) as usize;
-                                source_snapshots
-                                    .get(&addr)
-                                    .map(|(data, _)| data.len())
-                                    .unwrap_or(0)
-                            })
+                            .map(|buf| buf.lock().len())
                             .min()
                             .unwrap_or(0)
                     };
 
-                    // 処理するサンプル数を決定
                     let actual_block_size = min_available.min(max_block_size);
 
-                    // データがある場合のみ処理
                     if actual_block_size > 0 {
-                        // スナップショットからノードの入力バッファへデータをコピー
-                        Self::copy_source_to_input_from_snapshot(
-                            node_info,
-                            actual_block_size,
-                            &source_snapshots,
-                        );
-                        // ノードを処理
                         Self::process_node(node_info, actual_block_size, sr);
-                    }
-                }
 
-                // Phase 3: 使用したソースバッファからデータを消費
-                for node_info in &nodes_snapshot {
-                    for source in &node_info.source_buffers {
-                        let addr = Arc::as_ptr(source) as usize;
-                        if let Some((data, consumed)) = source_snapshots.get_mut(&addr) {
-                            if !*consumed {
-                                // まだ消費されていない場合のみ消費
-                                source.lock().consume(data.len());
-                                *consumed = true;
+                        // 消費予約（同じバッファの重複消費を防ぐ）
+                        for source in &node_info.source_buffers {
+                            let addr = Arc::as_ptr(source) as usize;
+                            if !consumed.contains(&addr) {
+                                consumed.insert(addr);
+                                consume_list.push((source.clone(), actual_block_size));
                             }
                         }
                     }
                 }
 
-                // 次の処理まで待機
+                // Phase 2: 全ソースバッファからデータを一括消費
+                for (buffer, size) in &consume_list {
+                    buffer.lock().consume(*size);
+                }
+
                 let elapsed = start.elapsed();
                 if elapsed < interval {
                     thread::sleep(interval - elapsed);
@@ -243,56 +198,23 @@ impl EffectProcessor {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// スナップショットからノードの入力バッファへデータをコピー
-    /// 分岐時に同じソースバッファが複数ノードで参照されていても
-    /// 事前に取得したスナップショットから読み取るため、データの消失を防ぐ
-    /// PassThroughの場合は直接出力バッファにコピー（入力バッファを経由しない）
-    fn copy_source_to_input_from_snapshot(
-        node_info: &EffectNodeInfo,
-        block_size: usize,
-        snapshots: &SourceSnapshot,
-    ) {
-        // PassThroughの場合は直接出力バッファにコピー
-        if matches!(node_info.node_type, EffectNodeType::PassThrough) {
-            if let Some(source) = node_info.source_buffers.first() {
-                let addr = Arc::as_ptr(source) as usize;
-                if let Some((data, _)) = snapshots.get(&addr) {
-                    let len = block_size.min(data.len());
-                    node_info.output_buffer.lock().push(&data[..len]);
-                }
-            }
-            return;
-        }
-
-        // 通常のエフェクトノードの場合は入力バッファにコピー
-        for (source, input) in node_info
-            .source_buffers
-            .iter()
-            .zip(node_info.input_buffers.iter())
-        {
-            let addr = Arc::as_ptr(source) as usize;
-            if let Some((data, _)) = snapshots.get(&addr) {
-                let len = block_size.min(data.len());
-                input.lock().push(&data[..len]);
-            }
-        }
+    /// ソースバッファからデータを読み取る（非破壊）
+    fn read_source(source_buffers: &[ChannelBuffer], index: usize, count: usize) -> Vec<f32> {
+        source_buffers
+            .get(index)
+            .map(|b| b.lock().read(count))
+            .unwrap_or_else(|| vec![0.0; count])
     }
 
     /// 単一ノードを処理
     fn process_node(node_info: &EffectNodeInfo, block_size: usize, sample_rate: f32) {
-        // PassThroughの場合は処理をスキップ（copy_source_to_inputで直接コピー済み）
-        if matches!(node_info.node_type, EffectNodeType::PassThrough) {
-            return;
-        }
+        let input_a = Self::read_source(&node_info.source_buffers, 0, block_size);
 
-        // 入力データを読み取り（ノード自身の入力バッファから）
-        let input_a = Self::read_from_input_buffer(&node_info.input_buffers, 0, block_size);
-
-        // ノードタイプに応じた処理
         let output_data: Vec<f32> = match &node_info.node_type {
+            EffectNodeType::Copy => input_a,
             EffectNodeType::Gain { gain } => input_a.iter().map(|&s| s * gain).collect(),
             EffectNodeType::Add => {
-                let input_b = Self::read_from_input_buffer(&node_info.input_buffers, 1, block_size);
+                let input_b = Self::read_source(&node_info.source_buffers, 1, block_size);
                 input_a
                     .iter()
                     .zip(input_b.iter())
@@ -300,7 +222,7 @@ impl EffectProcessor {
                     .collect()
             }
             EffectNodeType::Multiply => {
-                let input_b = Self::read_from_input_buffer(&node_info.input_buffers, 1, block_size);
+                let input_b = Self::read_source(&node_info.source_buffers, 1, block_size);
                 input_a
                     .iter()
                     .zip(input_b.iter())
@@ -319,20 +241,17 @@ impl EffectProcessor {
                 input_a.iter().map(|&s| state.process(s, &coeffs)).collect()
             }
             EffectNodeType::SpectrumAnalyzer { analyzer, spectrum } => {
-                // FFT用にサンプルを蓄積
                 {
                     let mut analyzer = analyzer.lock();
                     for &sample in &input_a {
                         analyzer.push_sample(sample);
                     }
-                    // スペクトラムを計算
                     let spectrum_data = analyzer.compute_spectrum();
                     let mut spec = spectrum.lock();
                     if spec.len() == spectrum_data.len() {
                         spec.copy_from_slice(&spectrum_data);
                     }
                 }
-                // パススルー
                 input_a
             }
             EffectNodeType::Compressor {
@@ -363,7 +282,6 @@ impl EffectProcessor {
             } => {
                 let mut shifter = pitch_shifter.lock();
                 shifter.set_semitones(*semitones);
-                // 位相アラインメントパラメータを更新
                 shifter.set_phase_alignment(crate::dsp::PhaseAlignmentParams {
                     enabled: *phase_alignment_enabled,
                     search_range_ratio: *search_range_ratio,
@@ -391,26 +309,9 @@ impl EffectProcessor {
                 vocoder.process(&input_a, &mut output);
                 output
             }
-            EffectNodeType::PassThrough => {
-                // この分岐には到達しない（早期リターン済み）
-                unreachable!("PassThrough is handled in copy_source_to_input")
-            }
         };
 
-        // 出力バッファに追加
         node_info.output_buffer.lock().push(&output_data);
-    }
-
-    /// 入力バッファからサンプルを読み取り、消費する
-    fn read_from_input_buffer(buffers: &[ChannelBuffer], index: usize, count: usize) -> Vec<f32> {
-        if let Some(buffer) = buffers.get(index) {
-            let mut buf = buffer.lock();
-            let samples = buf.read(count);
-            buf.consume(count);
-            samples
-        } else {
-            vec![0.0; count]
-        }
     }
 }
 
@@ -422,6 +323,6 @@ impl Drop for EffectProcessor {
 
 impl Default for EffectProcessor {
     fn default() -> Self {
-        Self::new(5) // デフォルト5ms間隔
+        Self::new(5)
     }
 }

@@ -45,20 +45,18 @@ src/
 
 設計原則:
 - `read()`は状態を変更しない（複数コンシューマー対応）
-- 分岐処理ではスナップショット方式を採用し、全コンシューマーが読み取り後に一度だけ`consume()`を実行
+- エフェクトプロセッサーが上流の出力バッファから直接`read()`し、全ノード処理後に一括`consume()`
 
 ### ChannelBuffer (nodes/mod.rs)
 `Arc<Mutex<AudioBuffer>>` - チャンネルごとの共有バッファ。
 
 ### NodeBuffers (nodes/mod.rs)
-ノードのバッファ管理を統一する構造体。入出力ノードと中間ノードで共通のインターフェースを提供。
-- `input_buffers`: 入力ピンごとのバッファ
+ノードのバッファ管理を統一する構造体。すべてのノードは出力バッファのみを持つ。
+入力バッファは不要（エフェクトプロセッサーが上流の出力バッファから直接読み取る）。
 - `output_buffers`: 出力ピンごとのバッファ
-- `single_io()`: 1入力1出力ノード用（GainNode, FilterNode等）
-- `multi_input(n)`: N入力1出力ノード用（AddNode, MultiplyNode等）
-- `input_only(ch)`: 入力専用ノード用（AudioOutputNode）
-- `output_only(ch)`: 出力専用ノード用（AudioInputNode）
-- `resize_inputs()`/`resize_outputs()`: バッファ数の動的変更
+- `single_output()`: 1出力ノード用（エフェクトノード共通）
+- `multi_output(ch)`: マルチチャンネル出力ノード用（AudioInputNode, AudioOutputNode等）
+- `resize_outputs()`: バッファ数の動的変更
 
 ### SpectrumDisplay (nodes/mod.rs)
 IOノードのスペクトラム表示機能をカプセル化する構造体。
@@ -78,11 +76,10 @@ UI描画時に必要なコンテキストを保持する構造体：
 ノードの機能は3つの独立したトレイトに分割されており、入力専用/出力専用/中間ノードを適切に表現できる：
 
 #### AudioInputPort trait
-オーディオ入力ポートを持つノード向けトレイト（デフォルト実装あり）：
+オーディオ入力ポートを持つノード向けトレイト（デフォルト実装あり）。ピンのメタデータのみ提供（バッファは持たない）：
 - `input_count()`: 入力ピン数（デフォルト: 0）
 - `input_pin_type()`: 入力ピンタイプ
 - `input_pin_name()`: 入力ピン名
-- `input_buffer()`: 指定入力ピンのバッファを取得
 
 #### AudioOutputPort trait
 オーディオ出力ポートを持つノード向けトレイト（デフォルト実装あり）：
@@ -155,23 +152,15 @@ cpalを使用したオーディオデバイス管理システム。
 専用スレッドでエフェクトノードをリアルタイム処理。コピーベースのバッファアーキテクチャを採用。
 - 2ms間隔で処理スレッドが動作（利用可能なデータ量に応じて動的にブロックサイズを調整）
 - `EffectNodeInfo`: 処理対象ノードの情報
-  - `source_buffers`: 接続元ノードの出力バッファ（データコピー元）
-  - `input_buffers`: ノード自身の入力バッファ（データコピー先、処理用）
+  - `source_buffers`: 接続元ノードの出力バッファ（直接読み取り元）
   - `output_buffer`: ノード自身の出力バッファ
-- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, WsolaPitchShift, GraphicEq, PassThrough）
-- 処理フロー（スナップショット方式）:
-  1. **Phase 1 - スナップショット作成**: 全ソースバッファから`read()`でデータを読み取り、スナップショットを作成
-     - 同じソースバッファを複数ノードが参照していても、データは一度だけ読み取る
-     - `HashMap<バッファアドレス, (データ, 消費済みフラグ)>`で管理
-  2. **Phase 2 - ノード処理**: スナップショットから入力バッファへコピーし、DSP処理を実行
-     - PassThrough（出力ノードへのルーティング）はソースから直接出力バッファにコピー
-  3. **Phase 3 - データ消費**: 使用したソースバッファから`consume()`でデータを削除（各バッファ一度だけ）
+- `EffectNodeType`: エフェクトタイプのenum（Gain, Add, Multiply, Filter, SpectrumAnalyzer, Compressor, WsolaPitchShift, GraphicEq, WorldVocoder, Copy）
+- 処理フロー（2フェーズ方式）:
+  1. **Phase 1 - 全ノード処理**: トポロジカル順序で各ノードを処理。上流の出力バッファから直接`read()`してDSP処理を実行し、自身の出力バッファに`push()`
+  2. **Phase 2 - 一括消費**: 使用した全ソースバッファから`consume()`でデータを一括削除（各バッファ一度だけ）
+- `read()`が非破壊なので、同じバッファを複数ノードが安全に読み取れる（スナップショット不要）
 - スレッドセーフなDSP状態管理（`Arc<Mutex<>>`でUI/処理スレッド間共有）
 - バッファ蓄積防止のため、利用可能なデータをできるだけ多く処理（最大8倍まで）
-
-スナップショット方式の利点:
-- 複数の出力ノードへの分岐時にデータが消失しない（従来の`read_and_consume()`では最初の消費者がデータを取り、後続が空になる問題があった）
-- 各ソースバッファのデータは全コンシューマーが読み取った後に一度だけ消費される
 
 ### AudioGraphViewer (viewer.rs)
 egui-snarlのSnarlViewerトレイトを実装。
@@ -208,11 +197,10 @@ egui-snarlのSnarlViewerトレイトを実装。
 ### 処理フロー
 1. `AudioInput`ノードがデバイスからインターリーブされた音声データを取得
 2. データはチャンネルごとに分離され、各`ChannelBuffer`（リングバッファ）に書き込まれる
-3. `EffectProcessor`スレッドがスナップショット方式で全ノードを処理
-   - Phase 1: 全ソースバッファからスナップショットを作成（各バッファ一度だけ）
-   - Phase 2: スナップショットから入力バッファへコピー、DSP処理、出力バッファに書き込み
-   - Phase 3: 使用したソースバッファからデータを消費（各バッファ一度だけ）
-   - 出力ノードへのルーティングもPassThroughとして同様に処理
+3. `EffectProcessor`スレッドがトポロジカル順序で全ノードを処理
+   - Phase 1: 各ノードが上流の出力バッファから直接`read()`、DSP処理、自身の出力バッファに`push()`
+   - Phase 2: 全ソースバッファからデータを一括`consume()`
+   - 出力ノードへのルーティングはCopyタイプとして同様に処理
 4. `AudioOutput`ノードは自身のバッファからデータを読み取り、デバイスに出力
 
 ## DSP処理 (dsp/)

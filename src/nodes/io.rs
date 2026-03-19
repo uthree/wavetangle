@@ -24,7 +24,7 @@ impl AudioInputNode {
     pub fn new(device_name: String, channels: u16) -> Self {
         Self {
             device_name,
-            buffers: NodeBuffers::output_only(channels),
+            buffers: NodeBuffers::multi_output(channels),
             is_active: true,
             spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
@@ -42,12 +42,7 @@ impl AudioInputNode {
     }
 }
 
-// AudioInputNodeのトレイト実装
-// 出力専用ノード: NodeBase + AudioOutputPort + NodeUI
-// AudioInputPortはデフォルト実装を使用（入力ピンなし）
-
-
-/// AudioInputNodeは入力ピンを持たない（デフォルト実装を使用）
+// AudioInputNodeは入力ピンを持たない（デフォルト実装を使用）
 impl AudioInputPort for AudioInputNode {}
 
 /// AudioInputNodeは出力ピンを持つ
@@ -129,10 +124,12 @@ impl NodeUI for AudioInputNode {
 // ============================================================================
 
 /// オーディオ出力デバイスノード
+/// 出力バッファを持ち、エフェクトプロセッサーがデータを書き込み、
+/// cpalコールバックがデータを読み取り・消費する。
 #[derive(Clone)]
 pub struct AudioOutputNode {
     pub device_name: String,
-    /// バッファ管理（入力専用）
+    /// バッファ管理（出力バッファ = cpalが読む先）
     pub buffers: NodeBuffers,
     pub is_active: bool,
     /// スペクトラム表示
@@ -143,7 +140,7 @@ impl AudioOutputNode {
     pub fn new(device_name: String, channels: u16) -> Self {
         Self {
             device_name,
-            buffers: NodeBuffers::input_only(channels),
+            buffers: NodeBuffers::multi_output(channels),
             is_active: true,
             spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
@@ -151,29 +148,24 @@ impl AudioOutputNode {
 
     /// チャンネル数を取得
     pub fn channels(&self) -> u16 {
-        self.buffers.input_count() as u16
+        self.buffers.output_count() as u16
     }
 
     /// チャンネル数に合わせてバッファを再作成
     pub fn resize_buffers(&mut self, channels: u16) {
         let channels = channels.max(1);
-        self.buffers.resize_inputs(channels as usize);
+        self.buffers.resize_outputs(channels as usize);
     }
 }
 
-// AudioOutputNodeのトレイト実装
-// 入力専用ノード: NodeBase + AudioInputPort + NodeUI
-// AudioOutputPortは内部バッファアクセス用にchannel_bufferとchannelsのみ実装
-
-
-/// AudioOutputNodeは入力ピンを持つ
+/// AudioOutputNodeは入力ピンを持つ（チャンネル数に応じて）
 impl AudioInputPort for AudioOutputNode {
     fn input_count(&self) -> usize {
-        self.buffers.input_count()
+        self.buffers.output_count()
     }
 
     fn input_pin_type(&self, index: usize) -> Option<PinType> {
-        if index < self.buffers.input_count() {
+        if index < self.buffers.output_count() {
             Some(PinType::Audio)
         } else {
             None
@@ -181,15 +173,11 @@ impl AudioInputPort for AudioOutputNode {
     }
 
     fn input_pin_name(&self, index: usize) -> Option<String> {
-        if index < self.buffers.input_count() {
+        if index < self.buffers.output_count() {
             Some(channel_name(index))
         } else {
             None
         }
-    }
-
-    fn input_buffer(&self, index: usize) -> Option<ChannelBuffer> {
-        self.buffers.input_buffer(index)
     }
 }
 
@@ -199,12 +187,11 @@ impl AudioOutputPort for AudioOutputNode {
     // output_count, output_pin_type, output_pin_nameはデフォルト（0, None）を使用
 
     fn channel_buffer(&self, channel: usize) -> Option<ChannelBuffer> {
-        // 出力ノードでは入力バッファを返す（データ送出用）
-        self.buffers.input_buffer(channel)
+        self.buffers.output_buffer(channel)
     }
 
     fn channels(&self) -> u16 {
-        self.buffers.input_count() as u16
+        self.buffers.output_count() as u16
     }
 
     fn set_channels(&mut self, channels: u16) {

@@ -20,7 +20,7 @@ pub struct AddNode {
 impl AddNode {
     pub fn new() -> Self {
         Self {
-            buffers: NodeBuffers::multi_input(2),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
         }
     }
@@ -67,7 +67,7 @@ pub struct MultiplyNode {
 impl MultiplyNode {
     pub fn new() -> Self {
         Self {
-            buffers: NodeBuffers::multi_input(2),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
         }
     }

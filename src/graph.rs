@@ -4,9 +4,7 @@ use egui_snarl::{InPinId, NodeId, Snarl};
 
 use crate::audio::{AudioSystem, OutputStreamId};
 use crate::effect_processor::{EffectNodeInfo, EffectNodeType, EffectProcessor};
-use crate::nodes::{
-    AudioInputPort, AudioNode, AudioOutputPort, ChannelBuffer,
-};
+use crate::nodes::{AudioNode, AudioOutputPort, ChannelBuffer};
 
 /// アクティブノードの状態
 enum ActiveNodeState {
@@ -31,7 +29,7 @@ impl AudioGraphProcessor {
         Self {
             active_nodes: HashMap::new(),
             sample_rate: 44100.0,
-            effect_processor: EffectProcessor::new(2), // 2ms間隔で高速処理
+            effect_processor: EffectProcessor::new(2),
         }
     }
 
@@ -48,17 +46,11 @@ impl AudioGraphProcessor {
 
     /// グラフの接続を処理し、オーディオをルーティング
     pub fn process(&mut self, snarl: &mut Snarl<AudioNode>, audio_system: &mut AudioSystem) {
-        // サンプルレートを更新
         self.sample_rate = audio_system.config().sample_rate as f32;
         self.effect_processor.set_sample_rate(self.sample_rate);
 
-        // アクティブなノードのストリームを管理
         self.manage_streams(snarl, audio_system);
-
-        // エフェクトノードの処理チェーンを構築・更新
         self.update_effect_chain(snarl);
-
-        // スペクトラム解析を更新
         self.update_spectrum(snarl);
     }
 
@@ -78,7 +70,7 @@ impl AudioGraphProcessor {
                 }
                 AudioNode::AudioOutput(output_node) => {
                     if output_node.is_active {
-                        if let Some(buffer) = output_node.buffers.input_buffers.first() {
+                        if let Some(buffer) = output_node.buffers.output_buffers.first() {
                             let samples = buffer.lock().read(FFT_SIZE);
                             output_node.spectrum_display.update_from_samples(&samples);
                         }
@@ -101,7 +93,6 @@ impl AudioGraphProcessor {
 
     /// エフェクト処理チェーンを更新
     fn update_effect_chain(&mut self, snarl: &Snarl<AudioNode>) {
-        // アクティブなオーディオがある場合のみ処理
         if self.active_nodes.is_empty() {
             if self.effect_processor.is_running() {
                 self.effect_processor.stop();
@@ -110,34 +101,28 @@ impl AudioGraphProcessor {
             return;
         }
 
-        // 処理順序を決定（トポロジカルソート）
         let sorted_nodes = self.topological_sort(snarl);
-
-        // エフェクトノード情報を収集
         let mut effect_nodes = Vec::new();
 
         for node_id in sorted_nodes {
             let node = &snarl[node_id];
 
-            // エフェクトノードの処理
-            if let Some(info) = self.build_effect_node_info(snarl, node_id, node) {
-                effect_nodes.push(info);
-            }
-
-            // 出力ノードへのデータコピー処理を追加
-            if let AudioNode::AudioOutput(output_node) = node {
-                if output_node.is_active {
-                    // 各チャンネルに対してPassThroughエフェクトを作成
-                    for ch in 0..output_node.channels() as usize {
-                        if let Some(source_buffer) = Self::get_source_buffer(snarl, node_id, ch)
-                        {
-                            // 出力ノードの入力バッファを使用
-                            if let Some(input_buffer) = output_node.input_buffer(ch) {
+            match node {
+                // エフェクトノード: ソースバッファから直接読み取り、自身の出力バッファに書き込む
+                AudioNode::AudioInput(_) => {
+                    // 入力ノードはcpalが直接バッファに書き込むため処理不要
+                }
+                AudioNode::AudioOutput(output_node) => {
+                    if output_node.is_active {
+                        // 各チャンネルに対してCopyノードを作成
+                        for ch in 0..output_node.channels() as usize {
+                            if let Some(source_buffer) =
+                                Self::get_source_buffer(snarl, node_id, ch)
+                            {
                                 if let Some(output_buffer) = output_node.channel_buffer(ch) {
                                     effect_nodes.push(EffectNodeInfo {
-                                        node_type: EffectNodeType::PassThrough,
+                                        node_type: EffectNodeType::Copy,
                                         source_buffers: vec![source_buffer],
-                                        input_buffers: vec![input_buffer],
                                         output_buffer,
                                     });
                                 }
@@ -145,13 +130,16 @@ impl AudioGraphProcessor {
                         }
                     }
                 }
+                _ => {
+                    if let Some(info) = self.build_effect_node_info(snarl, node_id, node) {
+                        effect_nodes.push(info);
+                    }
+                }
             }
         }
 
-        // プロセッサーを更新
         self.effect_processor.update_nodes(effect_nodes);
 
-        // プロセッサーが停止していれば開始
         if !self.effect_processor.is_running() {
             self.effect_processor.start();
         }
@@ -163,7 +151,6 @@ impl AudioGraphProcessor {
         let mut visited = HashSet::new();
         let mut temp_visited = HashSet::new();
 
-        // すべてのノードに対してDFS
         for (node_id, _) in snarl.node_ids() {
             if !visited.contains(&node_id) {
                 Self::topological_visit(
@@ -195,7 +182,6 @@ impl AudioGraphProcessor {
 
         let node = &snarl[node_id];
 
-        // このノードの入力に接続されているノードを先に訪問
         for input_idx in 0..node.input_count() {
             let in_pin = snarl.in_pin(InPinId {
                 node: node_id,
@@ -279,31 +265,15 @@ impl AudioGraphProcessor {
                 },
                 1,
             ),
-            // 入出力ノードはエフェクトノードではない
+            // 入出力ノードはここでは処理しない
             AudioNode::AudioInput(_) | AudioNode::AudioOutput(_) => return None,
         };
 
         // ソースバッファを収集（接続されたノードの出力バッファ）
         let mut source_buffers = Vec::new();
-        // ノード自身の入力バッファを収集
-        let mut input_buffers = Vec::new();
-
         for input_idx in 0..input_count {
-            let in_pin = snarl.in_pin(InPinId {
-                node: node_id,
-                input: input_idx,
-            });
-
-            // ソースバッファ（接続元ノードの出力）
-            if let Some(&remote) = in_pin.remotes.first() {
-                if let Some(buffer) = snarl[remote.node].channel_buffer(remote.output) {
-                    source_buffers.push(buffer);
-                }
-            }
-
-            // ノード自身の入力バッファ
-            if let Some(buffer) = node.input_buffer(input_idx) {
-                input_buffers.push(buffer);
+            if let Some(buffer) = Self::get_source_buffer(snarl, node_id, input_idx) {
+                source_buffers.push(buffer);
             }
         }
 
@@ -313,14 +283,12 @@ impl AudioGraphProcessor {
         Some(EffectNodeInfo {
             node_type,
             source_buffers,
-            input_buffers,
             output_buffer,
         })
     }
 
     /// ストリームの開始/停止を管理
     fn manage_streams(&mut self, snarl: &mut Snarl<AudioNode>, audio_system: &mut AudioSystem) {
-        // まず、状態変更が必要なノードを収集
         let mut to_start_input: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
         let mut to_stop_input: Vec<NodeId> = Vec::new();
         let mut to_start_output: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
@@ -342,9 +310,8 @@ impl AudioGraphProcessor {
                 }
                 AudioNode::AudioOutput(output_node) => {
                     if output_node.is_active && !self.active_nodes.contains_key(&node_id) {
-                        // 出力ノードは常に自身のバッファを使用
-                        // データはeffect_processorによってソースからコピーされる
-                        let buffers = output_node.buffers.input_buffers.clone();
+                        // 出力ノードのバッファを渡す（エフェクトプロセッサーが書き込み、cpalが読み取る）
+                        let buffers = output_node.buffers.output_buffers.clone();
                         to_start_output.push((
                             node_id,
                             output_node.device_name.clone(),
@@ -357,14 +324,11 @@ impl AudioGraphProcessor {
                             to_stop_output.push((node_id, *stream_id));
                         }
                     }
-                    // 接続変更はeffect_processorで自動的に処理されるため、再起動不要
                 }
-                // エフェクトノードはEffectProcessorで処理される
                 _ => {}
             }
         }
 
-        // ストリームを開始/停止
         for (node_id, device_name, buffers) in to_start_input {
             match audio_system.start_input(&device_name, buffers) {
                 Ok(channels) => {

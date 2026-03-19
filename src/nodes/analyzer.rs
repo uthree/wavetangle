@@ -40,7 +40,7 @@ impl SpectrumAnalyzerNode {
     pub fn new() -> Self {
         Self {
             spectrum: Arc::new(Mutex::new(vec![0.0; FFT_SIZE / 2])),
-            buffers: NodeBuffers::single_io(),
+            buffers: NodeBuffers::single_output(),
             is_active: false,
             analyzer: Arc::new(Mutex::new(crate::dsp::SpectrumAnalyzer::new())),
         }

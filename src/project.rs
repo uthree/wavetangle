@@ -31,7 +31,7 @@ fn default_correlation_length_ratio() -> f32 {
     0.75
 }
 fn default_block_ms() -> f32 {
-    80.0
+    200.0
 }
 
 /// ノードの位置情報

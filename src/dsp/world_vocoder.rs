@@ -1,8 +1,8 @@
 //! WORLDアルゴリズムベースの声質変換DSPモジュール
 //!
-//! 入力音声をブロック単位で蓄積し、ワーカースレッドでWORLD分析→パラメータ変換→再合成を行う。
-//! 合成結果は入力と同じサンプル数にリサンプルし、入出力レートを厳密に一致させる。
-//! 出力が間に合わない場合は入力信号をパススルーし、音途切れを防止する。
+//! 50%オーバーラップ + Hann窓によるoverlap-add方式を採用。
+//! 2つのHann窓の50%オーバーラップは定数1.0に合計されるため、
+//! ブロック境界での音途切れが原理的に発生しない。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,17 +14,13 @@ use parking_lot::Mutex;
 
 /// フレーム周期 (ms)
 const FRAME_PERIOD: f64 = 5.0;
-/// ブロック境界のクロスフェード長（サンプル数）
-const CROSSFADE_LEN: usize = 128;
-/// ピッチ推定・分析のオーバーラップ（前ブロック末尾から引き継ぐサンプル数）
-const ANALYSIS_OVERLAP: usize = 2048;
 
 /// ワーカースレッドとの共有状態
 struct SharedState {
-    /// ワーカーへの入力キュー（(分析窓全体, 出力サンプル数)）
+    /// ワーカーへの入力キュー（(分析窓, 出力サンプル数)）
     input_queue: VecDeque<(Vec<f64>, usize)>,
-    /// ワーカーからの出力キュー（処理済み、target_lenにリサンプル済み）
-    output_queue: VecDeque<Vec<f64>>,
+    /// ワーカーからの出力キュー（Hann窓適用済みブロック）
+    output_queue: VecDeque<Vec<f32>>,
     /// パラメータ
     pitch_shift_semitones: f64,
     formant_shift_semitones: f64,
@@ -35,31 +31,34 @@ pub struct WorldVocoder {
     shared: Arc<Mutex<SharedState>>,
     running: Arc<AtomicBool>,
     worker_handle: Option<thread::JoinHandle<()>>,
-    /// 入力蓄積バッファ
+    /// 入力蓄積バッファ（f64）
     input_buffer: Vec<f64>,
-    /// 処理済み出力キュー（ワーカーからの結果）
-    output_buffer: VecDeque<f32>,
-    /// パススルー用入力キュー（出力が間に合わない時のフォールバック）
+    /// overlap-add用の出力蓄積バッファ
+    ola_buffer: VecDeque<f32>,
+    /// 確定済み出力キュー（process()で消費する）
+    output_queue: VecDeque<f32>,
+    /// パススルー用入力キュー
     dry_buffer: VecDeque<f32>,
-    /// 分析ブロックサイズ
+    /// ブロックサイズ（分析窓サイズ）
     block_size: usize,
+    /// ホップサイズ（= block_size / 2）
+    hop_size: usize,
     sample_rate: f32,
-    /// 前ブロック末尾（分析オーバーラップ用）
-    prev_block_tail: Vec<f64>,
-    /// 前ブロック末尾（クロスフェード用）
-    prev_tail: [f64; CROSSFADE_LEN],
-    has_prev_tail: bool,
+    /// ワーカーに投入済みだが結果回収前のブロック数
+    pending_blocks: usize,
 }
 
 impl WorldVocoder {
     pub fn new(sample_rate: f32) -> Self {
-        Self::with_block_ms(sample_rate, 80.0)
+        Self::with_block_ms(sample_rate, 200.0)
     }
 
     pub fn with_block_ms(sample_rate: f32, block_ms: f32) -> Self {
         let sr = sample_rate as i32;
         let fft_size = world_dsp::get_fft_size_for_cheaptrick(sr, 71.0);
-        let block_size = ((sample_rate * block_ms / 1000.0) as usize).max(1024);
+        // block_sizeは偶数に揃える
+        let block_size = (((sample_rate * block_ms / 1000.0) as usize).max(1024)) & !1;
+        let hop_size = block_size / 2;
 
         let shared = Arc::new(Mutex::new(SharedState {
             input_queue: VecDeque::new(),
@@ -81,13 +80,13 @@ impl WorldVocoder {
             running,
             worker_handle: Some(worker_handle),
             input_buffer: Vec::with_capacity(block_size * 2),
-            output_buffer: VecDeque::with_capacity(block_size * 4),
+            ola_buffer: VecDeque::with_capacity(block_size * 2),
+            output_queue: VecDeque::with_capacity(block_size * 4),
             dry_buffer: VecDeque::with_capacity(block_size * 4),
             block_size,
+            hop_size,
             sample_rate,
-            prev_block_tail: Vec::new(),
-            prev_tail: [0.0; CROSSFADE_LEN],
-            has_prev_tail: false,
+            pending_blocks: 0,
         }
     }
 
@@ -100,12 +99,13 @@ impl WorldVocoder {
     }
 
     pub fn set_block_size(&mut self, new_block_size: usize) {
-        let new_block_size = new_block_size.max(1024);
+        let new_block_size = (new_block_size.max(1024)) & !1;
         if new_block_size != self.block_size {
             self.block_size = new_block_size;
+            self.hop_size = new_block_size / 2;
             self.input_buffer.clear();
-            self.prev_block_tail.clear();
-            self.has_prev_tail = false;
+            self.ola_buffer.clear();
+            self.pending_blocks = 0;
         }
     }
 
@@ -120,48 +120,41 @@ impl WorldVocoder {
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
         // 入力を蓄積
         self.input_buffer.extend(input.iter().map(|&s| s as f64));
-
-        // パススルー用にも入力を保持
         self.dry_buffer.extend(input.iter());
 
-        // ブロック単位でワーカーに投入
+        // hop_sizeごとにブロックをワーカーへ投入
+        // 最初のブロックはblock_size必要、以降はhop_sizeずつスライド
         while self.input_buffer.len() >= self.block_size {
-            let block: Vec<f64> = self.input_buffer.drain(..self.block_size).collect();
+            let block: Vec<f64> = self.input_buffer[..self.block_size].to_vec();
+            self.input_buffer.drain(..self.hop_size);
 
-            // 前ブロック末尾 + 現ブロックの連結データを作成
-            let mut analysis_block =
-                Vec::with_capacity(self.prev_block_tail.len() + block.len());
-            analysis_block.extend_from_slice(&self.prev_block_tail);
-            analysis_block.extend_from_slice(&block);
-
-            // 現ブロックの末尾をオーバーラップとして保存
-            let tail_start = block.len().saturating_sub(ANALYSIS_OVERLAP);
-            self.prev_block_tail = block[tail_start..].to_vec();
-
+            let target_len = self.block_size;
             self.shared
                 .lock()
                 .input_queue
-                .push_back((analysis_block, block.len()));
+                .push_back((block, target_len));
+            self.pending_blocks += 1;
         }
 
-        // ワーカーの処理結果を回収
-        let results: Vec<Vec<f64>> = {
-            let mut state = self.shared.lock();
-            state.output_queue.drain(..).collect()
-        };
-        for block in &results {
-            self.enqueue_block(block);
-            // 処理済み分のdryバッファを消費
-            let consume = block.len().min(self.dry_buffer.len());
-            self.dry_buffer.drain(..consume);
+        // ワーカーの処理結果を回収してoverlap-add
+        {
+            let results: Vec<Vec<f32>> = {
+                let mut state = self.shared.lock();
+                state.output_queue.drain(..).collect()
+            };
+            for windowed_block in &results {
+                self.overlap_add(windowed_block);
+                self.pending_blocks = self.pending_blocks.saturating_sub(1);
+            }
         }
 
-        // 出力: 処理済みがあればそれを使い、なければパススルー
+        // 出力
         for sample in output.iter_mut() {
-            if let Some(s) = self.output_buffer.pop_front() {
+            if let Some(s) = self.output_queue.pop_front() {
                 *sample = s;
+                // 処理済み分のdryバッファを消費
+                self.dry_buffer.pop_front();
             } else if let Some(s) = self.dry_buffer.pop_front() {
-                // 処理が追いつかない場合はパススルー
                 *sample = s;
             } else {
                 *sample = 0.0;
@@ -169,39 +162,40 @@ impl WorldVocoder {
         }
     }
 
-    fn enqueue_block(&mut self, block: &[f64]) {
-        if block.is_empty() {
-            return;
+    /// Hann窓適用済みブロックをola_bufferにoverlap-add
+    /// ola_bufferからhop_sizeサンプルをoutput_queueに確定出力
+    fn overlap_add(&mut self, windowed_block: &[f32]) {
+        let block_len = windowed_block.len();
+
+        // ola_bufferを必要なサイズに拡張（0パディング）
+        while self.ola_buffer.len() < block_len {
+            self.ola_buffer.push_back(0.0);
         }
 
-        if self.has_prev_tail && block.len() >= CROSSFADE_LEN {
-            for i in 0..CROSSFADE_LEN {
-                let t = (i + 1) as f64 / (CROSSFADE_LEN + 1) as f64;
-                let mixed = self.prev_tail[i] * (1.0 - t) + block[i] * t;
-                self.output_buffer.push_back(mixed as f32);
-            }
-            for &s in &block[CROSSFADE_LEN..] {
-                self.output_buffer.push_back(s as f32);
-            }
-        } else {
-            for &s in block {
-                self.output_buffer.push_back(s as f32);
-            }
+        // 加算
+        for (i, &s) in windowed_block.iter().enumerate() {
+            self.ola_buffer[i] += s;
         }
 
-        if block.len() >= CROSSFADE_LEN {
-            self.prev_tail
-                .copy_from_slice(&block[block.len() - CROSSFADE_LEN..]);
-            self.has_prev_tail = true;
+        // 先頭hop_sizeサンプルを確定出力に移動
+        let out_len = self.hop_size.min(self.ola_buffer.len());
+        for _ in 0..out_len {
+            if let Some(s) = self.ola_buffer.pop_front() {
+                self.output_queue.push_back(s);
+            }
         }
     }
 
+    /// ワーカースレッドのメインループ
     fn worker_loop(
         shared: Arc<Mutex<SharedState>>,
         running: Arc<AtomicBool>,
         sample_rate: i32,
         fft_size: usize,
     ) {
+        // Hann窓のキャッシュ（サイズごと）
+        let mut window_cache: Option<(usize, Vec<f32>)> = None;
+
         while running.load(Ordering::Relaxed) {
             let (item, pitch, formant) = {
                 let mut state = shared.lock();
@@ -217,6 +211,7 @@ impl WorldVocoder {
             };
 
             if let Some((analysis_block, target_len)) = item {
+                // WORLD処理
                 let synthesized = Self::process_block(
                     &analysis_block,
                     target_len,
@@ -225,7 +220,24 @@ impl WorldVocoder {
                     pitch,
                     formant,
                 );
-                shared.lock().output_queue.push_back(synthesized);
+
+                // Hann窓を適用
+                let window = match &window_cache {
+                    Some((size, w)) if *size == synthesized.len() => w,
+                    _ => {
+                        let w = create_hann_window(synthesized.len());
+                        window_cache = Some((synthesized.len(), w));
+                        &window_cache.as_ref().unwrap().1
+                    }
+                };
+
+                let windowed: Vec<f32> = synthesized
+                    .iter()
+                    .zip(window.iter())
+                    .map(|(&s, &w)| s * w)
+                    .collect();
+
+                shared.lock().output_queue.push_back(windowed);
             } else {
                 thread::sleep(std::time::Duration::from_millis(1));
             }
@@ -240,22 +252,21 @@ impl WorldVocoder {
         fft_size: usize,
         pitch_shift_semitones: f64,
         formant_shift_semitones: f64,
-    ) -> Vec<f64> {
-        // F0推定（YIN）
+    ) -> Vec<f32> {
+        // F0推定
         let yin = world_dsp::Yin::new(sample_rate);
         let (temporal_positions, f0) = world_dsp::F0Estimator::estimate(&yin, analysis_block);
 
         if f0.is_empty() {
-            // 推定失敗時は入力末尾をそのまま返す
-            let start = analysis_block.len().saturating_sub(target_len);
-            return analysis_block[start..].to_vec();
+            // F0推定失敗: 入力をそのまま返す（Hann窓は呼び出し側で適用）
+            return analysis_block.iter().map(|&s| s as f32).collect();
         }
 
-        // スペクトル包絡推定（分析窓全体）
+        // スペクトル包絡推定
         let cheaptrick = world_dsp::CheapTrick::new(sample_rate, fft_size);
         let spectrogram = cheaptrick.estimate(analysis_block, &temporal_positions, &f0);
 
-        // 非周期性指標推定（分析窓全体）
+        // 非周期性指標推定
         let d4c = world_dsp::D4C::new(sample_rate, fft_size);
         let aperiodicity = d4c.estimate(analysis_block, &temporal_positions, &f0);
 
@@ -274,19 +285,15 @@ impl WorldVocoder {
             spectrogram
         };
 
-        // 再合成（分析窓全体分）
+        // 再合成
         let synthesizer = world_dsp::Synthesizer::new(FRAME_PERIOD, sample_rate, fft_size);
         let full_result =
             synthesizer.synthesize(&modified_f0, &modified_spectrogram, &aperiodicity);
-        let full = full_result.to_vec();
+        let full: Vec<f64> = full_result.to_vec();
 
-        // 末尾 target_len サンプルを取り出してリサンプル
-        if full.len() >= target_len {
-            let start = full.len() - target_len;
-            resample_linear(&full[start..], target_len)
-        } else {
-            resample_linear(&full, target_len)
-        }
+        // target_lenにリサンプル
+        let resampled = resample_linear(&full, target_len);
+        resampled.iter().map(|&s| s as f32).collect()
     }
 }
 
@@ -297,6 +304,17 @@ impl Drop for WorldVocoder {
             let _ = handle.join();
         }
     }
+}
+
+/// Hann窓を生成
+fn create_hann_window(size: usize) -> Vec<f32> {
+    use std::f32::consts::PI;
+    (0..size)
+        .map(|i| {
+            let t = i as f32 / size as f32;
+            0.5 * (1.0 - (2.0 * PI * t).cos())
+        })
+        .collect()
 }
 
 /// 線形補間リサンプル

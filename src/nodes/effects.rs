@@ -435,7 +435,7 @@ impl Clone for WorldVocoderNode {
 
 impl WorldVocoderNode {
     pub fn new() -> Self {
-        let default_block_ms = 80.0;
+        let default_block_ms = 200.0;
         Self {
             pitch_semitones: 0.0,
             formant_semitones: 0.0,
@@ -492,7 +492,7 @@ impl NodeUI for WorldVocoderNode {
             ui.label("Block Size:");
             let old_block_ms = self.block_ms;
             ui.add(
-                egui::Slider::new(&mut self.block_ms, 40.0..=200.0)
+                egui::Slider::new(&mut self.block_ms, 40.0..=400.0)
                     .suffix(" ms")
                     .fixed_decimals(0),
             );

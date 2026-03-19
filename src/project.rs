@@ -33,6 +33,9 @@ fn default_correlation_length_ratio() -> f32 {
 fn default_block_ms() -> f32 {
     200.0
 }
+fn default_overlap_count() -> u32 {
+    2
+}
 fn default_f0_method() -> String {
     "yin".to_string()
 }
@@ -119,6 +122,8 @@ pub enum SavedNode {
         formant_semitones: f32,
         #[serde(default = "default_f0_method")]
         f0_method: String,
+        #[serde(default = "default_overlap_count")]
+        overlap_count: u32,
         #[serde(default = "default_block_ms")]
         block_ms: f32,
     },
@@ -245,6 +250,7 @@ impl ProjectFile {
                     use_fixed_pitch: n.pitch_ui_mode
                         == crate::nodes::effects::PitchUIMode::Fixed,
                     formant_semitones: n.formant_semitones,
+                    overlap_count: n.overlap_count,
                     f0_method: match n.f0_method {
                         crate::dsp::F0Method::Yin => "yin",
                         crate::dsp::F0Method::Dio => "dio",
@@ -410,6 +416,7 @@ impl ProjectFile {
                     fixed_pitch_hz,
                     use_fixed_pitch,
                     formant_semitones,
+                    overlap_count,
                     f0_method,
                     block_ms,
                 } => {
@@ -422,17 +429,18 @@ impl ProjectFile {
                         crate::nodes::effects::PitchUIMode::Shift
                     };
                     node.formant_semitones = *formant_semitones;
+                    node.overlap_count = *overlap_count;
                     node.f0_method = match f0_method.as_str() {
                         "dio" => crate::dsp::F0Method::Dio,
                         "harvest" => crate::dsp::F0Method::Harvest,
                         _ => crate::dsp::F0Method::Yin,
                     };
                     node.block_ms = *block_ms;
-                    // ブロックサイズをボコーダーに反映
                     if let Some(mut vocoder) = node.vocoder.try_lock() {
                         let sr = vocoder.sample_rate();
                         let new_size = ((sr * block_ms / 1000.0) as usize).max(1024);
                         vocoder.set_block_size(new_size);
+                        vocoder.set_overlap_count(*overlap_count as usize);
                     }
                     AudioNode::WorldVocoder(node)
                 }

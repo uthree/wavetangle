@@ -60,8 +60,10 @@ pub struct WorldVocoder {
     dry_buffer: VecDeque<f32>,
     /// ブロックサイズ（分析窓サイズ）
     block_size: usize,
-    /// ホップサイズ（= block_size / 2）
+    /// ホップサイズ（= block_size / overlap_count）
     hop_size: usize,
+    /// オーバーラップ数（2〜8、大きいほど過去のコンテキストが多い）
+    overlap_count: usize,
     sample_rate: f32,
     /// ワーカーに投入済みだが結果回収前のブロック数
     pending_blocks: usize,
@@ -77,7 +79,8 @@ impl WorldVocoder {
         let fft_size = world_dsp::get_fft_size_for_cheaptrick(sr, 71.0);
         // block_sizeは偶数に揃える
         let block_size = (((sample_rate * block_ms / 1000.0) as usize).max(1024)) & !1;
-        let hop_size = block_size / 2;
+        let overlap_count = 2usize;
+        let hop_size = block_size / overlap_count;
 
         let shared = Arc::new(Mutex::new(SharedState {
             input_queue: VecDeque::new(),
@@ -105,6 +108,7 @@ impl WorldVocoder {
             dry_buffer: VecDeque::with_capacity(block_size * 4),
             block_size,
             hop_size,
+            overlap_count,
             sample_rate,
             pending_blocks: 0,
         }
@@ -122,7 +126,22 @@ impl WorldVocoder {
         let new_block_size = (new_block_size.max(1024)) & !1;
         if new_block_size != self.block_size {
             self.block_size = new_block_size;
-            self.hop_size = new_block_size / 2;
+            self.hop_size = new_block_size / self.overlap_count;
+            self.input_buffer.clear();
+            self.ola_buffer.clear();
+            self.pending_blocks = 0;
+        }
+    }
+
+    pub fn overlap_count(&self) -> usize {
+        self.overlap_count
+    }
+
+    pub fn set_overlap_count(&mut self, count: usize) {
+        let count = count.clamp(2, 8);
+        if count != self.overlap_count {
+            self.overlap_count = count;
+            self.hop_size = self.block_size / count;
             self.input_buffer.clear();
             self.ola_buffer.clear();
             self.pending_blocks = 0;

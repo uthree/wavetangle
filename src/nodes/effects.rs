@@ -420,6 +420,8 @@ pub struct WorldVocoderNode {
     pub formant_semitones: f32,
     /// F0推定アルゴリズム
     pub f0_method: crate::dsp::F0Method,
+    /// オーバーラップ数（2〜8）
+    pub overlap_count: u32,
     /// ブロックサイズ（ミリ秒）
     pub block_ms: f32,
     /// バッファ管理
@@ -438,6 +440,7 @@ impl Clone for WorldVocoderNode {
             fixed_pitch_hz: self.fixed_pitch_hz,
             formant_semitones: self.formant_semitones,
             f0_method: self.f0_method,
+            overlap_count: self.overlap_count,
             block_ms: self.block_ms,
             buffers: self.buffers.clone(),
             is_active: self.is_active,
@@ -458,6 +461,7 @@ impl WorldVocoderNode {
             fixed_pitch_hz: 200.0,
             formant_semitones: 0.0,
             f0_method: crate::dsp::F0Method::Yin,
+            overlap_count: 2,
             block_ms: default_block_ms,
             buffers: NodeBuffers::single_output(),
             is_active: false,
@@ -558,6 +562,18 @@ impl NodeUI for WorldVocoderNode {
                     let sr = vocoder.sample_rate();
                     let new_size = ((sr * self.block_ms / 1000.0) as usize).max(1024);
                     vocoder.set_block_size(new_size);
+                }
+            }
+
+            ui.label("Overlap:");
+            let old_overlap = self.overlap_count;
+            ui.add(
+                egui::Slider::new(&mut self.overlap_count, 2..=8)
+                    .suffix("x"),
+            );
+            if self.overlap_count != old_overlap {
+                if let Some(mut vocoder) = self.vocoder.try_lock() {
+                    vocoder.set_overlap_count(self.overlap_count as usize);
                 }
             }
 

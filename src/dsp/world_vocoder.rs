@@ -395,9 +395,12 @@ fn resample_linear(input: &[f64], target_len: usize) -> Vec<f64> {
 }
 
 /// スペクトル包絡を周波数方向にシフト（フォルマント操作）
+/// ratio > 1.0: 高域へシフト（声が細くなる）
+/// ratio < 1.0: 低域へシフト（声が太くなる）
 fn shift_spectrogram(spectrogram: &Array2<f64>, ratio: f64) -> Array2<f64> {
     let (num_frames, freq_bins) = spectrogram.dim();
     let mut shifted = Array2::zeros((num_frames, freq_bins));
+    let last_bin = freq_bins - 1;
 
     for frame in 0..num_frames {
         for bin in 0..freq_bins {
@@ -406,10 +409,12 @@ fn shift_spectrogram(spectrogram: &Array2<f64>, ratio: f64) -> Array2<f64> {
             let frac = src_bin - src_idx as f64;
 
             if src_idx + 1 < freq_bins {
+                // 範囲内: 線形補間
                 shifted[[frame, bin]] = spectrogram[[frame, src_idx]] * (1.0 - frac)
                     + spectrogram[[frame, src_idx + 1]] * frac;
-            } else if src_idx < freq_bins {
-                shifted[[frame, bin]] = spectrogram[[frame, src_idx]];
+            } else {
+                // 範囲外: 最終ビンの値で埋める（無音にしない）
+                shifted[[frame, bin]] = spectrogram[[frame, last_bin]];
             }
         }
     }

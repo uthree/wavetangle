@@ -388,10 +388,11 @@ fn shift_spectrogram(spectrogram: &Array2<f64>, ratio: f64) -> Array2<f64> {
     shifted
 }
 
-/// 倍音振幅制御: 各フレームのF0に基づいてn次倍音周辺のスペクトル包絡にゲインを適用
+/// 倍音振幅制御: 各フレームのF0に基づいてn次倍音のスペクトル包絡にゲインを適用
 ///
-/// スペクトル包絡はパワースペクトル密度なので、倍音の周波数ビン周辺に
-/// ガウシアン重み付きでゲインを乗算する（急激な変化を避けるため）。
+/// CheapTrickの出力はパワースペクトル密度(PSD)なので、振幅ゲインgに対して
+/// g^2をPSDに乗算する必要がある（振幅 = sqrt(PSD)のため）。
+/// 各倍音の中心ビンにガウシアン重みでゲインを適用し、隣接倍音への干渉を防ぐ。
 fn apply_harmonic_gains(
     spectrogram: &mut Array2<f64>,
     f0: &[f64],
@@ -400,32 +401,34 @@ fn apply_harmonic_gains(
     fft_size: usize,
 ) {
     let (num_frames, freq_bins) = spectrogram.dim();
-    let bin_freq = sample_rate as f64 / fft_size as f64; // 各ビンの周波数幅
+    let bin_freq = sample_rate as f64 / fft_size as f64;
 
     for frame in 0..num_frames {
         let frame_f0 = if frame < f0.len() { f0[frame] } else { 0.0 };
         if frame_f0 <= 0.0 {
-            continue; // 無声フレームはスキップ
+            continue;
         }
 
-        // 各ビンに適用するゲインを計算（初期値1.0 = 変化なし）
+        // 各ビンに適用するPSDゲインを計算
         let mut bin_gains = vec![1.0_f64; freq_bins];
 
         for (n, &gain) in harmonic_gains.iter().enumerate() {
             if (gain - 1.0).abs() < 1e-6 {
-                continue; // ゲイン1.0は変化なし
+                continue;
             }
 
             let harmonic_freq = frame_f0 * (n + 1) as f64;
             let center_bin = harmonic_freq / bin_freq;
 
             if center_bin >= freq_bins as f64 {
-                break; // ナイキスト超え
+                break;
             }
 
-            // 倍音周辺のビンにガウシアン重みでゲインを適用
-            // σ = F0の半分程度（隣接倍音と重ならない幅）
-            let sigma = (frame_f0 / bin_freq) * 0.4;
+            // PSDドメインのゲイン（振幅ゲインの2乗）
+            let psd_gain = gain * gain;
+
+            // σ = 倍音間隔の半分程度（F0/bin_freqが1倍音分のビン幅）
+            let sigma = (frame_f0 / bin_freq) * 0.35;
             let sigma_sq = sigma * sigma;
             let range = (sigma * 3.0).ceil() as i64;
             let center = center_bin.round() as i64;
@@ -435,13 +438,13 @@ fn apply_harmonic_gains(
                 if bin >= 0 && (bin as usize) < freq_bins {
                     let dist = bin as f64 - center_bin;
                     let weight = (-0.5 * dist * dist / sigma_sq).exp();
-                    // 重み付きでゲインを補間（1.0からgainへ）
-                    bin_gains[bin as usize] *= 1.0 + weight * (gain - 1.0);
+                    // ガウシアン重みで1.0からpsd_gainへ補間
+                    let effective_gain = 1.0 + weight * (psd_gain - 1.0);
+                    bin_gains[bin as usize] *= effective_gain;
                 }
             }
         }
 
-        // ゲインを適用
         for bin in 0..freq_bins {
             spectrogram[[frame, bin]] *= bin_gains[bin];
         }

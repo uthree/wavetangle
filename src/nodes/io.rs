@@ -16,6 +16,8 @@ pub struct AudioInputNode {
     /// バッファ管理（出力専用）
     pub buffers: NodeBuffers,
     pub is_active: bool,
+    /// モノラルモード（全チャンネルをミックスダウンして1チャンネル出力）
+    pub mono: bool,
     /// スペクトラム表示
     pub spectrum_display: SpectrumDisplay,
 }
@@ -26,11 +28,12 @@ impl AudioInputNode {
             device_name,
             buffers: NodeBuffers::multi_output(channels),
             is_active: true,
+            mono: false,
             spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
     }
 
-    /// チャンネル数を取得
+    /// チャンネル数を取得（monoなら常に1）
     pub fn channels(&self) -> u16 {
         self.buffers.output_count() as u16
     }
@@ -38,7 +41,8 @@ impl AudioInputNode {
     /// チャンネル数に合わせてバッファを再作成
     pub fn resize_buffers(&mut self, channels: u16) {
         let channels = channels.max(1);
-        self.buffers.resize_outputs(channels as usize);
+        let actual = if self.mono { 1 } else { channels as usize };
+        self.buffers.resize_outputs(actual);
     }
 }
 
@@ -93,6 +97,7 @@ impl NodeUI for AudioInputNode {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.is_active, "Active");
+                ui.checkbox(&mut self.mono, "Mono");
                 if self.is_active {
                     ui.label(format!("{}ch", self.channels()));
                 }
@@ -132,6 +137,8 @@ pub struct AudioOutputNode {
     /// バッファ管理（出力バッファ = cpalが読む先）
     pub buffers: NodeBuffers,
     pub is_active: bool,
+    /// モノラルモード（1チャンネル入力を全チャンネルに分配）
+    pub mono: bool,
     /// スペクトラム表示
     pub spectrum_display: SpectrumDisplay,
 }
@@ -142,11 +149,12 @@ impl AudioOutputNode {
             device_name,
             buffers: NodeBuffers::multi_output(channels),
             is_active: true,
+            mono: false,
             spectrum_display: SpectrumDisplay::with_analyzer(FFT_SIZE),
         }
     }
 
-    /// チャンネル数を取得
+    /// チャンネル数を取得（monoなら常に1）
     pub fn channels(&self) -> u16 {
         self.buffers.output_count() as u16
     }
@@ -154,7 +162,8 @@ impl AudioOutputNode {
     /// チャンネル数に合わせてバッファを再作成
     pub fn resize_buffers(&mut self, channels: u16) {
         let channels = channels.max(1);
-        self.buffers.resize_outputs(channels as usize);
+        let actual = if self.mono { 1 } else { channels as usize };
+        self.buffers.resize_outputs(actual);
     }
 }
 
@@ -212,6 +221,7 @@ impl NodeUI for AudioOutputNode {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.is_active, "Active");
+                ui.checkbox(&mut self.mono, "Mono");
                 if self.is_active {
                     ui.label(format!("{}ch", self.channels()));
                 }

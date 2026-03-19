@@ -144,19 +144,35 @@ impl AudioSystem {
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let num_channels = channel_buffers.len();
-                    if num_channels == 0 {
+                    let num_buffers = channel_buffers.len();
+                    if num_buffers == 0 {
                         return;
                     }
 
-                    // インターリーブされたデータをチャンネルごとに分離
                     let frame_count = data.len() / channels as usize;
-                    for ch in 0..num_channels.min(channels as usize) {
-                        let mut buf = channel_buffers[ch].lock();
+
+                    if num_buffers == 1 && channels > 1 {
+                        // モノラルモード: 全チャンネルを平均してバッファ1本に書き込み
+                        let mut buf = channel_buffers[0].lock();
                         let samples: Vec<f32> = (0..frame_count)
-                            .map(|frame| data[frame * channels as usize + ch])
+                            .map(|frame| {
+                                let mut sum = 0.0f32;
+                                for ch in 0..channels as usize {
+                                    sum += data[frame * channels as usize + ch];
+                                }
+                                sum / channels as f32
+                            })
                             .collect();
                         buf.push(&samples);
+                    } else {
+                        // 通常モード: チャンネルごとに分離
+                        for ch in 0..num_buffers.min(channels as usize) {
+                            let mut buf = channel_buffers[ch].lock();
+                            let samples: Vec<f32> = (0..frame_count)
+                                .map(|frame| data[frame * channels as usize + ch])
+                                .collect();
+                            buf.push(&samples);
+                        }
                     }
                 },
                 |err| eprintln!("Input stream error: {}", err),

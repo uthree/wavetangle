@@ -8,10 +8,10 @@ use crate::nodes::{AudioNode, AudioOutputPort, ChannelBuffer};
 
 /// アクティブノードの状態
 enum ActiveNodeState {
-    /// 入力ノード
-    Input,
-    /// 出力ノード（ストリームIDを保持）
-    Output { stream_id: OutputStreamId },
+    /// 入力ノード（mono状態を保持）
+    Input { mono: bool },
+    /// 出力ノード（ストリームIDとmono状態を保持）
+    Output { stream_id: OutputStreamId, mono: bool },
 }
 
 /// オーディオグラフの処理を管理
@@ -264,6 +264,7 @@ impl AudioGraphProcessor {
                     harmonic_gains: vocoder_node.harmonic_gains.clone(),
                     use_harmonic_gains: vocoder_node.spectral_mode
                         == crate::nodes::effects::SpectralMode::HarmonicGains,
+                    f0_method: vocoder_node.f0_method,
                     vocoder: vocoder_node.vocoder.clone(),
                 },
                 1,
@@ -292,10 +293,13 @@ impl AudioGraphProcessor {
 
     /// ストリームの開始/停止を管理
     fn manage_streams(&mut self, snarl: &mut Snarl<AudioNode>, audio_system: &mut AudioSystem) {
-        let mut to_start_input: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
+        let mut to_start_input: Vec<(NodeId, String, Vec<ChannelBuffer>, bool)> = Vec::new();
         let mut to_stop_input: Vec<NodeId> = Vec::new();
-        let mut to_start_output: Vec<(NodeId, String, Vec<ChannelBuffer>)> = Vec::new();
+        let mut to_start_output: Vec<(NodeId, String, Vec<ChannelBuffer>, bool)> = Vec::new();
         let mut to_stop_output: Vec<(NodeId, OutputStreamId)> = Vec::new();
+        // mono変更時にバッファ再構築が必要なノード（(NodeId, デバイスch数)）
+        let mut mono_changed_inputs: Vec<NodeId> = Vec::new();
+        let mut mono_changed_outputs: Vec<NodeId> = Vec::new();
 
         for (node_id, node) in snarl.node_ids() {
             match node {
@@ -305,23 +309,41 @@ impl AudioGraphProcessor {
                             node_id,
                             input_node.device_name.clone(),
                             input_node.buffers.output_buffers.clone(),
+                            input_node.mono,
                         ));
-                    } else if !input_node.is_active && self.active_nodes.contains_key(&node_id)
-                    {
+                    } else if input_node.is_active {
+                        if let Some(ActiveNodeState::Input { mono }) =
+                            self.active_nodes.get(&node_id)
+                        {
+                            if *mono != input_node.mono {
+                                mono_changed_inputs.push(node_id);
+                                to_stop_input.push(node_id);
+                            }
+                        }
+                    } else if self.active_nodes.contains_key(&node_id) {
                         to_stop_input.push(node_id);
                     }
                 }
                 AudioNode::AudioOutput(output_node) => {
                     if output_node.is_active && !self.active_nodes.contains_key(&node_id) {
-                        // 出力ノードのバッファを渡す（エフェクトプロセッサーが書き込み、cpalが読み取る）
                         let buffers = output_node.buffers.output_buffers.clone();
                         to_start_output.push((
                             node_id,
                             output_node.device_name.clone(),
                             buffers,
+                            output_node.mono,
                         ));
+                    } else if output_node.is_active {
+                        if let Some(ActiveNodeState::Output { stream_id, mono }) =
+                            self.active_nodes.get(&node_id)
+                        {
+                            if *mono != output_node.mono {
+                                mono_changed_outputs.push(node_id);
+                                to_stop_output.push((node_id, *stream_id));
+                            }
+                        }
                     } else if !output_node.is_active {
-                        if let Some(ActiveNodeState::Output { stream_id }) =
+                        if let Some(ActiveNodeState::Output { stream_id, .. }) =
                             self.active_nodes.get(&node_id)
                         {
                             to_stop_output.push((node_id, *stream_id));
@@ -332,13 +354,61 @@ impl AudioGraphProcessor {
             }
         }
 
-        for (node_id, device_name, buffers) in to_start_input {
+        // Step 1: 停止処理
+        for node_id in to_stop_input {
+            audio_system.stop_input();
+            self.active_nodes.remove(&node_id);
+        }
+
+        for (node_id, stream_id) in to_stop_output {
+            audio_system.stop_output(stream_id);
+            self.active_nodes.remove(&node_id);
+        }
+
+        // Step 2: mono変更されたノードのバッファを再構築してstart対象に追加
+        for node_id in mono_changed_inputs {
+            if let Some(node) = snarl.get_node_mut(node_id) {
+                if let AudioNode::AudioInput(input_node) = node {
+                    let ch = audio_system
+                        .input_device_channels(&input_node.device_name)
+                        .unwrap_or(2);
+                    input_node.resize_buffers(ch);
+                    to_start_input.push((
+                        node_id,
+                        input_node.device_name.clone(),
+                        input_node.buffers.output_buffers.clone(),
+                        input_node.mono,
+                    ));
+                }
+            }
+        }
+
+        for node_id in mono_changed_outputs {
+            if let Some(node) = snarl.get_node_mut(node_id) {
+                if let AudioNode::AudioOutput(output_node) = node {
+                    let ch = audio_system
+                        .output_device_channels(&output_node.device_name)
+                        .unwrap_or(2);
+                    output_node.resize_buffers(ch);
+                    to_start_output.push((
+                        node_id,
+                        output_node.device_name.clone(),
+                        output_node.buffers.output_buffers.clone(),
+                        output_node.mono,
+                    ));
+                }
+            }
+        }
+
+        // Step 3: 開始処理
+        for (node_id, device_name, buffers, mono) in to_start_input {
             match audio_system.start_input(&device_name, buffers) {
                 Ok(channels) => {
                     if let Some(node) = snarl.get_node_mut(node_id) {
                         node.set_channels(channels);
                     }
-                    self.active_nodes.insert(node_id, ActiveNodeState::Input);
+                    self.active_nodes
+                        .insert(node_id, ActiveNodeState::Input { mono });
                 }
                 Err(e) => {
                     eprintln!("Failed to start input: {}", e);
@@ -349,19 +419,14 @@ impl AudioGraphProcessor {
             }
         }
 
-        for node_id in to_stop_input {
-            audio_system.stop_input();
-            self.active_nodes.remove(&node_id);
-        }
-
-        for (node_id, device_name, buffers) in to_start_output {
+        for (node_id, device_name, buffers, mono) in to_start_output {
             match audio_system.start_output(&device_name, buffers) {
                 Ok((channels, stream_id)) => {
                     if let Some(node) = snarl.get_node_mut(node_id) {
                         node.set_channels(channels);
                     }
                     self.active_nodes
-                        .insert(node_id, ActiveNodeState::Output { stream_id });
+                        .insert(node_id, ActiveNodeState::Output { stream_id, mono });
                 }
                 Err(e) => {
                     eprintln!("Failed to start output: {}", e);
@@ -370,11 +435,6 @@ impl AudioGraphProcessor {
                     }
                 }
             }
-        }
-
-        for (node_id, stream_id) in to_stop_output {
-            audio_system.stop_output(stream_id);
-            self.active_nodes.remove(&node_id);
         }
     }
 

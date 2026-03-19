@@ -36,6 +36,9 @@ fn default_block_ms() -> f32 {
 fn default_harmonic_gains() -> Vec<f32> {
     vec![1.0; crate::dsp::DEFAULT_NUM_HARMONICS]
 }
+fn default_f0_method() -> String {
+    "yin".to_string()
+}
 
 /// ノードの位置情報
 #[derive(Clone, Serialize, Deserialize)]
@@ -65,12 +68,16 @@ pub enum SavedNode {
         device_name: String,
         #[serde(default = "default_channels")]
         channels: u16,
+        #[serde(default)]
+        mono: bool,
         show_spectrum: bool,
     },
     AudioOutput {
         device_name: String,
         #[serde(default = "default_channels")]
         channels: u16,
+        #[serde(default)]
+        mono: bool,
         show_spectrum: bool,
     },
     Gain {
@@ -113,6 +120,8 @@ pub enum SavedNode {
         harmonic_gains: Vec<f32>,
         #[serde(default)]
         use_harmonic_gains: bool,
+        #[serde(default = "default_f0_method")]
+        f0_method: String,
         #[serde(default = "default_block_ms")]
         block_ms: f32,
     },
@@ -196,11 +205,13 @@ impl ProjectFile {
                 AudioNode::AudioInput(n) => SavedNode::AudioInput {
                     device_name: n.device_name.clone(),
                     channels: n.channels(),
+                    mono: n.mono,
                     show_spectrum: n.spectrum_display.enabled,
                 },
                 AudioNode::AudioOutput(n) => SavedNode::AudioOutput {
                     device_name: n.device_name.clone(),
                     channels: n.channels(),
+                    mono: n.mono,
                     show_spectrum: n.spectrum_display.enabled,
                 },
                 AudioNode::Gain(n) => SavedNode::Gain { gain: n.gain },
@@ -237,6 +248,12 @@ impl ProjectFile {
                     harmonic_gains: n.harmonic_gains.clone(),
                     use_harmonic_gains: n.spectral_mode
                         == crate::nodes::effects::SpectralMode::HarmonicGains,
+                    f0_method: match n.f0_method {
+                        crate::dsp::F0Method::Yin => "yin",
+                        crate::dsp::F0Method::Dio => "dio",
+                        crate::dsp::F0Method::Harvest => "harvest",
+                    }
+                    .to_string(),
                     block_ms: n.block_ms,
                 },
             };
@@ -292,19 +309,29 @@ impl ProjectFile {
                 SavedNode::AudioInput {
                     device_name,
                     channels,
+                    mono,
                     show_spectrum,
                 } => {
                     let mut node = AudioInputNode::new(device_name.clone(), *channels);
+                    node.mono = *mono;
                     node.spectrum_display.enabled = *show_spectrum;
+                    if *mono {
+                        node.resize_buffers(*channels);
+                    }
                     AudioNode::AudioInput(node)
                 }
                 SavedNode::AudioOutput {
                     device_name,
                     channels,
+                    mono,
                     show_spectrum,
                 } => {
                     let mut node = AudioOutputNode::new(device_name.clone(), *channels);
+                    node.mono = *mono;
                     node.spectrum_display.enabled = *show_spectrum;
+                    if *mono {
+                        node.resize_buffers(*channels);
+                    }
                     AudioNode::AudioOutput(node)
                 }
                 SavedNode::Gain { gain } => {
@@ -386,6 +413,7 @@ impl ProjectFile {
                     formant_semitones,
                     harmonic_gains,
                     use_harmonic_gains,
+                    f0_method,
                     block_ms,
                 } => {
                     let mut node = WorldVocoderNode::new();
@@ -394,6 +422,11 @@ impl ProjectFile {
                     if !harmonic_gains.is_empty() {
                         node.harmonic_gains = harmonic_gains.clone();
                     }
+                    node.f0_method = match f0_method.as_str() {
+                        "dio" => crate::dsp::F0Method::Dio,
+                        "harvest" => crate::dsp::F0Method::Harvest,
+                        _ => crate::dsp::F0Method::Yin,
+                    };
                     node.spectral_mode = if *use_harmonic_gains {
                         crate::nodes::effects::SpectralMode::HarmonicGains
                     } else {
@@ -458,6 +491,7 @@ mod tests {
         let saved = SavedNode::AudioInput {
             device_name: "Test Device".to_string(),
             channels: 1,
+            mono: false,
             show_spectrum: true,
         };
         let json = serde_json::to_string(&saved).unwrap();
@@ -468,6 +502,7 @@ mod tests {
         if let SavedNode::AudioInput {
             device_name,
             channels,
+            mono: _,
             show_spectrum,
         } = restored
         {
@@ -487,6 +522,7 @@ mod tests {
         if let SavedNode::AudioInput {
             device_name,
             channels,
+            mono: _,
             show_spectrum,
         } = restored
         {
@@ -503,6 +539,7 @@ mod tests {
         if let SavedNode::AudioOutput {
             device_name,
             channels,
+            mono: _,
             show_spectrum,
         } = restored
         {

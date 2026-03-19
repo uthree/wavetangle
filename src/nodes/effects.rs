@@ -419,6 +419,8 @@ pub struct WorldVocoderNode {
     pub formant_semitones: f32,
     /// 倍音振幅係数（HarmonicGainsモード用）
     pub harmonic_gains: Vec<f32>,
+    /// F0推定アルゴリズム
+    pub f0_method: crate::dsp::F0Method,
     /// ブロックサイズ（ミリ秒）
     pub block_ms: f32,
     /// バッファ管理
@@ -436,6 +438,7 @@ impl Clone for WorldVocoderNode {
             spectral_mode: self.spectral_mode,
             formant_semitones: self.formant_semitones,
             harmonic_gains: self.harmonic_gains.clone(),
+            f0_method: self.f0_method,
             block_ms: self.block_ms,
             buffers: self.buffers.clone(),
             is_active: self.is_active,
@@ -455,6 +458,7 @@ impl WorldVocoderNode {
             spectral_mode: SpectralMode::FormantShift,
             formant_semitones: 0.0,
             harmonic_gains: vec![1.0; crate::dsp::DEFAULT_NUM_HARMONICS],
+            f0_method: crate::dsp::F0Method::Yin,
             block_ms: default_block_ms,
             buffers: NodeBuffers::single_output(),
             is_active: false,
@@ -532,6 +536,26 @@ impl NodeUI for WorldVocoderNode {
             }
 
             ui.separator();
+
+            // F0推定アルゴリズム選択
+            ui.horizontal(|ui| {
+                ui.label("F0:");
+                ui.selectable_value(
+                    &mut self.f0_method,
+                    crate::dsp::F0Method::Yin,
+                    "YIN",
+                );
+                ui.selectable_value(
+                    &mut self.f0_method,
+                    crate::dsp::F0Method::Dio,
+                    "DIO",
+                );
+                ui.selectable_value(
+                    &mut self.f0_method,
+                    crate::dsp::F0Method::Harvest,
+                    "Harvest",
+                );
+            });
 
             ui.label("Block Size:");
             let old_block_ms = self.block_ms;

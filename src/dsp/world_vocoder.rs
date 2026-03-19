@@ -17,6 +17,14 @@ const FRAME_PERIOD: f64 = 5.0;
 /// デフォルトの倍音制御数
 pub const DEFAULT_NUM_HARMONICS: usize = 8;
 
+/// F0推定アルゴリズム
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum F0Method {
+    Yin,
+    Dio,
+    Harvest,
+}
+
 /// ワーカースレッドとの共有状態
 struct SharedState {
     /// ワーカーへの入力キュー（(分析窓, 出力サンプル数)）
@@ -29,6 +37,8 @@ struct SharedState {
     /// 倍音振幅係数（index 0 = 基本波, index 1 = 第2倍音, ...）
     /// 1.0 = 変化なし, 0.0 = 消音, 2.0 = 2倍
     harmonic_gains: Vec<f64>,
+    /// F0推定アルゴリズム
+    f0_method: F0Method,
 }
 
 /// WORLDボコーダー処理
@@ -71,6 +81,7 @@ impl WorldVocoder {
             pitch_shift_semitones: 0.0,
             formant_shift_semitones: 0.0,
             harmonic_gains: vec![1.0; DEFAULT_NUM_HARMONICS],
+            f0_method: F0Method::Yin,
         }));
 
         let running = Arc::new(AtomicBool::new(true));
@@ -125,6 +136,10 @@ impl WorldVocoder {
 
     pub fn set_harmonic_gains(&mut self, gains: &[f64]) {
         self.shared.lock().harmonic_gains = gains.to_vec();
+    }
+
+    pub fn set_f0_method(&mut self, method: F0Method) {
+        self.shared.lock().f0_method = method;
     }
 
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
@@ -207,7 +222,7 @@ impl WorldVocoder {
         let mut window_cache: Option<(usize, Vec<f32>)> = None;
 
         while running.load(Ordering::Relaxed) {
-            let (item, pitch, formant, harmonics) = {
+            let (item, pitch, formant, harmonics, f0_method) = {
                 let mut state = shared.lock();
                 if let Some(item) = state.input_queue.pop_front() {
                     (
@@ -215,14 +230,14 @@ impl WorldVocoder {
                         state.pitch_shift_semitones,
                         state.formant_shift_semitones,
                         state.harmonic_gains.clone(),
+                        state.f0_method,
                     )
                 } else {
-                    (None, 0.0, 0.0, Vec::new())
+                    (None, 0.0, 0.0, Vec::new(), F0Method::Yin)
                 }
             };
 
             if let Some((analysis_block, target_len)) = item {
-                // WORLD処理
                 let synthesized = Self::process_block(
                     &analysis_block,
                     target_len,
@@ -231,6 +246,7 @@ impl WorldVocoder {
                     pitch,
                     formant,
                     &harmonics,
+                    f0_method,
                 );
 
                 // Hann窓を適用
@@ -265,10 +281,23 @@ impl WorldVocoder {
         pitch_shift_semitones: f64,
         formant_shift_semitones: f64,
         harmonic_gains: &[f64],
+        f0_method: F0Method,
     ) -> Vec<f32> {
-        // F0推定
-        let yin = world_dsp::Yin::new(sample_rate);
-        let (temporal_positions, f0) = world_dsp::F0Estimator::estimate(&yin, analysis_block);
+        // F0推定（選択されたアルゴリズムを使用）
+        let (temporal_positions, f0) = match f0_method {
+            F0Method::Yin => {
+                let estimator = world_dsp::Yin::new(sample_rate);
+                world_dsp::F0Estimator::estimate(&estimator, analysis_block)
+            }
+            F0Method::Dio => {
+                let estimator = world_dsp::Dio::new(sample_rate);
+                world_dsp::F0Estimator::estimate(&estimator, analysis_block)
+            }
+            F0Method::Harvest => {
+                let estimator = world_dsp::Harvest::new(sample_rate);
+                world_dsp::F0Estimator::estimate(&estimator, analysis_block)
+            }
+        };
 
         if f0.is_empty() {
             return analysis_block.iter().map(|&s| s as f32).collect();

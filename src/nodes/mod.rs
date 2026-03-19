@@ -20,8 +20,7 @@ pub const EQ_FFT_SIZE: usize = 2048;
 // サブモジュールからの公開re-export
 pub use analyzer::SpectrumAnalyzerNode;
 pub use effects::{
-    CompressorNode, FilterNode, FilterType, GainNode, GraphicEqNode, TdPsolaPitchShiftNode,
-    WsolaPitchShiftNode,
+    CompressorNode, FilterNode, FilterType, GainNode, GraphicEqNode, WsolaPitchShiftNode,
 };
 pub use io::{AudioInputNode, AudioOutputNode};
 pub use math::{AddNode, MultiplyNode};
@@ -600,7 +599,6 @@ pub enum AudioNode {
     SpectrumAnalyzer(SpectrumAnalyzerNode),
     Compressor(CompressorNode),
     WsolaPitchShift(WsolaPitchShiftNode),
-    TdPsolaPitchShift(TdPsolaPitchShiftNode),
     GraphicEq(GraphicEqNode),
 }
 
@@ -617,7 +615,6 @@ macro_rules! delegate {
             AudioNode::SpectrumAnalyzer(n) => n.$method($($args),*),
             AudioNode::Compressor(n) => n.$method($($args),*),
             AudioNode::WsolaPitchShift(n) => n.$method($($args),*),
-            AudioNode::TdPsolaPitchShift(n) => n.$method($($args),*),
             AudioNode::GraphicEq(n) => n.$method($($args),*),
         }
     };
@@ -637,7 +634,6 @@ impl AudioNode {
             AudioNode::SpectrumAnalyzer(_) => "Spectrum",
             AudioNode::Compressor(_) => "Compressor",
             AudioNode::WsolaPitchShift(_) => "WSOLA Pitch Shift",
-            AudioNode::TdPsolaPitchShift(_) => "TD-PSOLA Pitch Shift",
             AudioNode::GraphicEq(_) => "Graphic EQ",
         }
     }
@@ -754,20 +750,6 @@ impl AudioNode {
     pub fn as_wsola_pitch_shift(&self) -> Option<&WsolaPitchShiftNode> {
         match self {
             AudioNode::WsolaPitchShift(n) => Some(n),
-            _ => None,
-        }
-    }
-
-    pub fn as_td_psola_pitch_shift(&self) -> Option<&TdPsolaPitchShiftNode> {
-        match self {
-            AudioNode::TdPsolaPitchShift(n) => Some(n),
-            _ => None,
-        }
-    }
-
-    pub fn as_td_psola_pitch_shift_mut(&mut self) -> Option<&mut TdPsolaPitchShiftNode> {
-        match self {
-            AudioNode::TdPsolaPitchShift(n) => Some(n),
             _ => None,
         }
     }

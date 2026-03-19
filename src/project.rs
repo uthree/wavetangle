@@ -115,6 +115,10 @@ pub enum SavedNode {
     },
     WorldVocoder {
         pitch_semitones: f32,
+        #[serde(default)]
+        fixed_pitch_hz: f32,
+        #[serde(default)]
+        use_fixed_pitch: bool,
         formant_semitones: f32,
         #[serde(default = "default_harmonic_gains")]
         harmonic_gains: Vec<f32>,
@@ -244,6 +248,9 @@ impl ProjectFile {
                 },
                 AudioNode::WorldVocoder(n) => SavedNode::WorldVocoder {
                     pitch_semitones: n.pitch_semitones,
+                    fixed_pitch_hz: n.fixed_pitch_hz,
+                    use_fixed_pitch: n.pitch_ui_mode
+                        == crate::nodes::effects::PitchUIMode::Fixed,
                     formant_semitones: n.formant_semitones,
                     harmonic_gains: n.harmonic_gains.clone(),
                     use_harmonic_gains: n.spectral_mode
@@ -410,6 +417,8 @@ impl ProjectFile {
                 }
                 SavedNode::WorldVocoder {
                     pitch_semitones,
+                    fixed_pitch_hz,
+                    use_fixed_pitch,
                     formant_semitones,
                     harmonic_gains,
                     use_harmonic_gains,
@@ -418,6 +427,12 @@ impl ProjectFile {
                 } => {
                     let mut node = WorldVocoderNode::new();
                     node.pitch_semitones = *pitch_semitones;
+                    node.fixed_pitch_hz = *fixed_pitch_hz;
+                    node.pitch_ui_mode = if *use_fixed_pitch {
+                        crate::nodes::effects::PitchUIMode::Fixed
+                    } else {
+                        crate::nodes::effects::PitchUIMode::Shift
+                    };
                     node.formant_semitones = *formant_semitones;
                     if !harmonic_gains.is_empty() {
                         node.harmonic_gains = harmonic_gains.clone();

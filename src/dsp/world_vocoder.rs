@@ -25,6 +25,15 @@ pub enum F0Method {
     Harvest,
 }
 
+/// ピッチ操作モード
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum PitchMode {
+    /// 相対シフト（半音単位）
+    Shift(f64),
+    /// 固定周波数（Hz）。0 = 強制無声音
+    Fixed(f64),
+}
+
 /// ワーカースレッドとの共有状態
 struct SharedState {
     /// ワーカーへの入力キュー（(分析窓, 出力サンプル数)）
@@ -32,7 +41,7 @@ struct SharedState {
     /// ワーカーからの出力キュー（Hann窓適用済みブロック）
     output_queue: VecDeque<Vec<f32>>,
     /// パラメータ
-    pitch_shift_semitones: f64,
+    pitch_mode: PitchMode,
     formant_shift_semitones: f64,
     /// 倍音振幅係数（index 0 = 基本波, index 1 = 第2倍音, ...）
     /// 1.0 = 変化なし, 0.0 = 消音, 2.0 = 2倍
@@ -78,7 +87,7 @@ impl WorldVocoder {
         let shared = Arc::new(Mutex::new(SharedState {
             input_queue: VecDeque::new(),
             output_queue: VecDeque::new(),
-            pitch_shift_semitones: 0.0,
+            pitch_mode: PitchMode::Shift(0.0),
             formant_shift_semitones: 0.0,
             harmonic_gains: vec![1.0; DEFAULT_NUM_HARMONICS],
             f0_method: F0Method::Yin,
@@ -126,8 +135,8 @@ impl WorldVocoder {
         }
     }
 
-    pub fn set_pitch_shift(&mut self, semitones: f64) {
-        self.shared.lock().pitch_shift_semitones = semitones;
+    pub fn set_pitch_mode(&mut self, mode: PitchMode) {
+        self.shared.lock().pitch_mode = mode;
     }
 
     pub fn set_formant_shift(&mut self, semitones: f64) {
@@ -222,18 +231,18 @@ impl WorldVocoder {
         let mut window_cache: Option<(usize, Vec<f32>)> = None;
 
         while running.load(Ordering::Relaxed) {
-            let (item, pitch, formant, harmonics, f0_method) = {
+            let (item, pitch_mode, formant, harmonics, f0_method) = {
                 let mut state = shared.lock();
                 if let Some(item) = state.input_queue.pop_front() {
                     (
                         Some(item),
-                        state.pitch_shift_semitones,
+                        state.pitch_mode,
                         state.formant_shift_semitones,
                         state.harmonic_gains.clone(),
                         state.f0_method,
                     )
                 } else {
-                    (None, 0.0, 0.0, Vec::new(), F0Method::Yin)
+                    (None, PitchMode::Shift(0.0), 0.0, Vec::new(), F0Method::Yin)
                 }
             };
 
@@ -243,7 +252,7 @@ impl WorldVocoder {
                     target_len,
                     sample_rate,
                     fft_size,
-                    pitch,
+                    pitch_mode,
                     formant,
                     &harmonics,
                     f0_method,
@@ -278,7 +287,7 @@ impl WorldVocoder {
         target_len: usize,
         sample_rate: i32,
         fft_size: usize,
-        pitch_shift_semitones: f64,
+        pitch_mode: PitchMode,
         formant_shift_semitones: f64,
         harmonic_gains: &[f64],
         f0_method: F0Method,
@@ -311,12 +320,19 @@ impl WorldVocoder {
         let d4c = world_dsp::D4C::new(sample_rate, fft_size);
         let aperiodicity = d4c.estimate(analysis_block, &temporal_positions, &f0);
 
-        // ピッチシフト
-        let pitch_ratio = 2.0_f64.powf(pitch_shift_semitones / 12.0);
-        let modified_f0: Vec<f64> = f0
-            .iter()
-            .map(|&v| if v > 0.0 { v * pitch_ratio } else { 0.0 })
-            .collect();
+        // ピッチ操作
+        let modified_f0: Vec<f64> = match pitch_mode {
+            PitchMode::Shift(semitones) => {
+                let ratio = 2.0_f64.powf(semitones / 12.0);
+                f0.iter()
+                    .map(|&v| if v > 0.0 { v * ratio } else { 0.0 })
+                    .collect()
+            }
+            PitchMode::Fixed(hz) => {
+                // 全フレームを指定周波数に固定（0 = 無声音）
+                vec![hz; f0.len()]
+            }
+        };
 
         // フォルマントシフト
         let formant_ratio = 2.0_f64.powf(formant_shift_semitones / 12.0);

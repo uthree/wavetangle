@@ -259,7 +259,14 @@ impl AudioGraphProcessor {
             ),
             AudioNode::WorldVocoder(vocoder_node) => (
                 EffectNodeType::WorldVocoder {
-                    pitch_semitones: vocoder_node.pitch_semitones,
+                    pitch_mode: match vocoder_node.pitch_ui_mode {
+                        crate::nodes::effects::PitchUIMode::Shift => {
+                            crate::dsp::PitchMode::Shift(vocoder_node.pitch_semitones as f64)
+                        }
+                        crate::nodes::effects::PitchUIMode::Fixed => {
+                            crate::dsp::PitchMode::Fixed(vocoder_node.fixed_pitch_hz as f64)
+                        }
+                    },
                     formant_semitones: vocoder_node.formant_semitones,
                     harmonic_gains: vocoder_node.harmonic_gains.clone(),
                     use_harmonic_gains: vocoder_node.spectral_mode

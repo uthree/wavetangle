@@ -410,9 +410,22 @@ pub enum SpectralMode {
 }
 
 /// WORLDアルゴリズムベースの声質変換ノード
+/// ピッチ操作UIモード
+#[derive(Clone, Copy, PartialEq)]
+pub enum PitchUIMode {
+    /// 相対シフト（半音単位）
+    Shift,
+    /// 固定周波数（Hz）
+    Fixed,
+}
+
 pub struct WorldVocoderNode {
+    /// ピッチUIモード
+    pub pitch_ui_mode: PitchUIMode,
     /// ピッチシフト量（半音単位、-24〜+24）
     pub pitch_semitones: f32,
+    /// 固定ピッチ（Hz、0=無声音）
+    pub fixed_pitch_hz: f32,
     /// スペクトル操作モード
     pub spectral_mode: SpectralMode,
     /// フォルマントシフト量（半音単位、FormantShiftモード用）
@@ -434,7 +447,9 @@ pub struct WorldVocoderNode {
 impl Clone for WorldVocoderNode {
     fn clone(&self) -> Self {
         Self {
+            pitch_ui_mode: self.pitch_ui_mode,
             pitch_semitones: self.pitch_semitones,
+            fixed_pitch_hz: self.fixed_pitch_hz,
             spectral_mode: self.spectral_mode,
             formant_semitones: self.formant_semitones,
             harmonic_gains: self.harmonic_gains.clone(),
@@ -454,7 +469,9 @@ impl WorldVocoderNode {
     pub fn new() -> Self {
         let default_block_ms = 200.0;
         Self {
+            pitch_ui_mode: PitchUIMode::Shift,
             pitch_semitones: 0.0,
+            fixed_pitch_hz: 200.0,
             spectral_mode: SpectralMode::FormantShift,
             formant_semitones: 0.0,
             harmonic_gains: vec![1.0; crate::dsp::DEFAULT_NUM_HARMONICS],
@@ -492,12 +509,29 @@ impl NodeUI for WorldVocoderNode {
         ui.vertical(|ui| {
             ui.set_max_width(220.0);
 
-            ui.label("Pitch Shift:");
-            ui.add(
-                egui::Slider::new(&mut self.pitch_semitones, -24.0..=24.0)
-                    .suffix(" st")
-                    .fixed_decimals(1),
-            );
+            // ピッチモード切替
+            ui.horizontal(|ui| {
+                ui.label("Pitch:");
+                ui.selectable_value(&mut self.pitch_ui_mode, PitchUIMode::Shift, "Shift");
+                ui.selectable_value(&mut self.pitch_ui_mode, PitchUIMode::Fixed, "Fixed");
+            });
+
+            match self.pitch_ui_mode {
+                PitchUIMode::Shift => {
+                    ui.add(
+                        egui::Slider::new(&mut self.pitch_semitones, -24.0..=24.0)
+                            .suffix(" st")
+                            .fixed_decimals(1),
+                    );
+                }
+                PitchUIMode::Fixed => {
+                    ui.add(
+                        egui::Slider::new(&mut self.fixed_pitch_hz, 0.0..=800.0)
+                            .suffix(" Hz")
+                            .fixed_decimals(0),
+                    );
+                }
+            }
 
             ui.separator();
 
@@ -576,6 +610,7 @@ impl NodeUI for WorldVocoderNode {
 
             if ui.button("Reset").clicked() {
                 self.pitch_semitones = 0.0;
+                self.fixed_pitch_hz = 200.0;
                 self.formant_semitones = 0.0;
                 for g in &mut self.harmonic_gains {
                     *g = 1.0;

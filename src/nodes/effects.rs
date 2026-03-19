@@ -400,14 +400,26 @@ impl NodeUI for WsolaPitchShiftNode {
 // WorldVocoderNode - WORLD声質変換
 // ============================================================================
 
+/// スペクトル操作モード
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SpectralMode {
+    /// フォルマントシフト（半音単位で一律シフト）
+    FormantShift,
+    /// 倍音振幅制御（各倍音の係数を個別調整）
+    HarmonicGains,
+}
+
 /// WORLDアルゴリズムベースの声質変換ノード
-/// ピッチシフトとフォルマントシフトを独立に制御可能
 pub struct WorldVocoderNode {
     /// ピッチシフト量（半音単位、-24〜+24）
     pub pitch_semitones: f32,
-    /// フォルマントシフト量（半音単位、-24〜+24）
+    /// スペクトル操作モード
+    pub spectral_mode: SpectralMode,
+    /// フォルマントシフト量（半音単位、FormantShiftモード用）
     pub formant_semitones: f32,
-    /// ブロックサイズ（ミリ秒、大きいほど安定するがレイテンシ増加）
+    /// 倍音振幅係数（HarmonicGainsモード用）
+    pub harmonic_gains: Vec<f32>,
+    /// ブロックサイズ（ミリ秒）
     pub block_ms: f32,
     /// バッファ管理
     pub buffers: NodeBuffers,
@@ -421,7 +433,9 @@ impl Clone for WorldVocoderNode {
     fn clone(&self) -> Self {
         Self {
             pitch_semitones: self.pitch_semitones,
+            spectral_mode: self.spectral_mode,
             formant_semitones: self.formant_semitones,
+            harmonic_gains: self.harmonic_gains.clone(),
             block_ms: self.block_ms,
             buffers: self.buffers.clone(),
             is_active: self.is_active,
@@ -438,7 +452,9 @@ impl WorldVocoderNode {
         let default_block_ms = 200.0;
         Self {
             pitch_semitones: 0.0,
+            spectral_mode: SpectralMode::FormantShift,
             formant_semitones: 0.0,
+            harmonic_gains: vec![1.0; crate::dsp::DEFAULT_NUM_HARMONICS],
             block_ms: default_block_ms,
             buffers: NodeBuffers::single_output(),
             is_active: false,
@@ -470,7 +486,7 @@ impl NodeUI for WorldVocoderNode {
 
     fn show_body(&mut self, ui: &mut Ui, _ctx: &NodeUIContext) {
         ui.vertical(|ui| {
-            ui.set_max_width(180.0);
+            ui.set_max_width(220.0);
 
             ui.label("Pitch Shift:");
             ui.add(
@@ -479,16 +495,44 @@ impl NodeUI for WorldVocoderNode {
                     .fixed_decimals(1),
             );
 
-            ui.label("Formant Shift:");
-            ui.add(
-                egui::Slider::new(&mut self.formant_semitones, -24.0..=24.0)
-                    .suffix(" st")
-                    .fixed_decimals(1),
-            );
+            ui.separator();
+
+            // スペクトル操作モード切替
+            ui.horizontal(|ui| {
+                ui.label("Spectral:");
+                ui.selectable_value(
+                    &mut self.spectral_mode,
+                    SpectralMode::FormantShift,
+                    "Shift",
+                );
+                ui.selectable_value(
+                    &mut self.spectral_mode,
+                    SpectralMode::HarmonicGains,
+                    "Harmonics",
+                );
+            });
+
+            match self.spectral_mode {
+                SpectralMode::FormantShift => {
+                    ui.add(
+                        egui::Slider::new(&mut self.formant_semitones, -24.0..=24.0)
+                            .suffix(" st")
+                            .fixed_decimals(1),
+                    );
+                }
+                SpectralMode::HarmonicGains => {
+                    for i in 0..self.harmonic_gains.len() {
+                        ui.add(
+                            egui::Slider::new(&mut self.harmonic_gains[i], 0.0..=3.0)
+                                .text(format!("H{}", i + 1))
+                                .fixed_decimals(2),
+                        );
+                    }
+                }
+            }
 
             ui.separator();
 
-            // ブロックサイズ（レイテンシ vs 安定性のトレードオフ）
             ui.label("Block Size:");
             let old_block_ms = self.block_ms;
             ui.add(
@@ -506,10 +550,12 @@ impl NodeUI for WorldVocoderNode {
 
             ui.label(format!("Latency: ~{:.0} ms", self.block_ms));
 
-            // リセットボタン
             if ui.button("Reset").clicked() {
                 self.pitch_semitones = 0.0;
                 self.formant_semitones = 0.0;
+                for g in &mut self.harmonic_gains {
+                    *g = 1.0;
+                }
             }
         });
     }

@@ -14,6 +14,8 @@ use parking_lot::Mutex;
 
 /// フレーム周期 (ms)
 const FRAME_PERIOD: f64 = 5.0;
+/// デフォルトの倍音制御数
+pub const DEFAULT_NUM_HARMONICS: usize = 8;
 
 /// ワーカースレッドとの共有状態
 struct SharedState {
@@ -24,6 +26,9 @@ struct SharedState {
     /// パラメータ
     pitch_shift_semitones: f64,
     formant_shift_semitones: f64,
+    /// 倍音振幅係数（index 0 = 基本波, index 1 = 第2倍音, ...）
+    /// 1.0 = 変化なし, 0.0 = 消音, 2.0 = 2倍
+    harmonic_gains: Vec<f64>,
 }
 
 /// WORLDボコーダー処理
@@ -65,6 +70,7 @@ impl WorldVocoder {
             output_queue: VecDeque::new(),
             pitch_shift_semitones: 0.0,
             formant_shift_semitones: 0.0,
+            harmonic_gains: vec![1.0; DEFAULT_NUM_HARMONICS],
         }));
 
         let running = Arc::new(AtomicBool::new(true));
@@ -115,6 +121,10 @@ impl WorldVocoder {
 
     pub fn set_formant_shift(&mut self, semitones: f64) {
         self.shared.lock().formant_shift_semitones = semitones;
+    }
+
+    pub fn set_harmonic_gains(&mut self, gains: &[f64]) {
+        self.shared.lock().harmonic_gains = gains.to_vec();
     }
 
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
@@ -197,16 +207,17 @@ impl WorldVocoder {
         let mut window_cache: Option<(usize, Vec<f32>)> = None;
 
         while running.load(Ordering::Relaxed) {
-            let (item, pitch, formant) = {
+            let (item, pitch, formant, harmonics) = {
                 let mut state = shared.lock();
                 if let Some(item) = state.input_queue.pop_front() {
                     (
                         Some(item),
                         state.pitch_shift_semitones,
                         state.formant_shift_semitones,
+                        state.harmonic_gains.clone(),
                     )
                 } else {
-                    (None, 0.0, 0.0)
+                    (None, 0.0, 0.0, Vec::new())
                 }
             };
 
@@ -219,6 +230,7 @@ impl WorldVocoder {
                     fft_size,
                     pitch,
                     formant,
+                    &harmonics,
                 );
 
                 // Hann窓を適用
@@ -252,13 +264,13 @@ impl WorldVocoder {
         fft_size: usize,
         pitch_shift_semitones: f64,
         formant_shift_semitones: f64,
+        harmonic_gains: &[f64],
     ) -> Vec<f32> {
         // F0推定
         let yin = world_dsp::Yin::new(sample_rate);
         let (temporal_positions, f0) = world_dsp::F0Estimator::estimate(&yin, analysis_block);
 
         if f0.is_empty() {
-            // F0推定失敗: 入力をそのまま返す（Hann窓は呼び出し側で適用）
             return analysis_block.iter().map(|&s| s as f32).collect();
         }
 
@@ -279,11 +291,22 @@ impl WorldVocoder {
 
         // フォルマントシフト
         let formant_ratio = 2.0_f64.powf(formant_shift_semitones / 12.0);
-        let modified_spectrogram = if (formant_ratio - 1.0).abs() > 1e-6 {
+        let mut modified_spectrogram = if (formant_ratio - 1.0).abs() > 1e-6 {
             shift_spectrogram(&spectrogram, formant_ratio)
         } else {
             spectrogram
         };
+
+        // 倍音振幅制御
+        if !harmonic_gains.is_empty() {
+            apply_harmonic_gains(
+                &mut modified_spectrogram,
+                &f0,
+                harmonic_gains,
+                sample_rate,
+                fft_size,
+            );
+        }
 
         // 再合成
         let synthesizer = world_dsp::Synthesizer::new(FRAME_PERIOD, sample_rate, fft_size);
@@ -291,7 +314,6 @@ impl WorldVocoder {
             synthesizer.synthesize(&modified_f0, &modified_spectrogram, &aperiodicity);
         let full: Vec<f64> = full_result.to_vec();
 
-        // target_lenにリサンプル
         let resampled = resample_linear(&full, target_len);
         resampled.iter().map(|&s| s as f32).collect()
     }
@@ -364,4 +386,64 @@ fn shift_spectrogram(spectrogram: &Array2<f64>, ratio: f64) -> Array2<f64> {
     }
 
     shifted
+}
+
+/// 倍音振幅制御: 各フレームのF0に基づいてn次倍音周辺のスペクトル包絡にゲインを適用
+///
+/// スペクトル包絡はパワースペクトル密度なので、倍音の周波数ビン周辺に
+/// ガウシアン重み付きでゲインを乗算する（急激な変化を避けるため）。
+fn apply_harmonic_gains(
+    spectrogram: &mut Array2<f64>,
+    f0: &[f64],
+    harmonic_gains: &[f64],
+    sample_rate: i32,
+    fft_size: usize,
+) {
+    let (num_frames, freq_bins) = spectrogram.dim();
+    let bin_freq = sample_rate as f64 / fft_size as f64; // 各ビンの周波数幅
+
+    for frame in 0..num_frames {
+        let frame_f0 = if frame < f0.len() { f0[frame] } else { 0.0 };
+        if frame_f0 <= 0.0 {
+            continue; // 無声フレームはスキップ
+        }
+
+        // 各ビンに適用するゲインを計算（初期値1.0 = 変化なし）
+        let mut bin_gains = vec![1.0_f64; freq_bins];
+
+        for (n, &gain) in harmonic_gains.iter().enumerate() {
+            if (gain - 1.0).abs() < 1e-6 {
+                continue; // ゲイン1.0は変化なし
+            }
+
+            let harmonic_freq = frame_f0 * (n + 1) as f64;
+            let center_bin = harmonic_freq / bin_freq;
+
+            if center_bin >= freq_bins as f64 {
+                break; // ナイキスト超え
+            }
+
+            // 倍音周辺のビンにガウシアン重みでゲインを適用
+            // σ = F0の半分程度（隣接倍音と重ならない幅）
+            let sigma = (frame_f0 / bin_freq) * 0.4;
+            let sigma_sq = sigma * sigma;
+            let range = (sigma * 3.0).ceil() as i64;
+            let center = center_bin.round() as i64;
+
+            for offset in -range..=range {
+                let bin = center + offset;
+                if bin >= 0 && (bin as usize) < freq_bins {
+                    let dist = bin as f64 - center_bin;
+                    let weight = (-0.5 * dist * dist / sigma_sq).exp();
+                    // 重み付きでゲインを補間（1.0からgainへ）
+                    bin_gains[bin as usize] *= 1.0 + weight * (gain - 1.0);
+                }
+            }
+        }
+
+        // ゲインを適用
+        for bin in 0..freq_bins {
+            spectrogram[[frame, bin]] *= bin_gains[bin];
+        }
+    }
 }

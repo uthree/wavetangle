@@ -33,6 +33,9 @@ fn default_correlation_length_ratio() -> f32 {
 fn default_block_ms() -> f32 {
     200.0
 }
+fn default_harmonic_gains() -> Vec<f32> {
+    vec![1.0; crate::dsp::DEFAULT_NUM_HARMONICS]
+}
 
 /// ノードの位置情報
 #[derive(Clone, Serialize, Deserialize)]
@@ -106,6 +109,10 @@ pub enum SavedNode {
     WorldVocoder {
         pitch_semitones: f32,
         formant_semitones: f32,
+        #[serde(default = "default_harmonic_gains")]
+        harmonic_gains: Vec<f32>,
+        #[serde(default)]
+        use_harmonic_gains: bool,
         #[serde(default = "default_block_ms")]
         block_ms: f32,
     },
@@ -227,6 +234,9 @@ impl ProjectFile {
                 AudioNode::WorldVocoder(n) => SavedNode::WorldVocoder {
                     pitch_semitones: n.pitch_semitones,
                     formant_semitones: n.formant_semitones,
+                    harmonic_gains: n.harmonic_gains.clone(),
+                    use_harmonic_gains: n.spectral_mode
+                        == crate::nodes::effects::SpectralMode::HarmonicGains,
                     block_ms: n.block_ms,
                 },
             };
@@ -374,11 +384,21 @@ impl ProjectFile {
                 SavedNode::WorldVocoder {
                     pitch_semitones,
                     formant_semitones,
+                    harmonic_gains,
+                    use_harmonic_gains,
                     block_ms,
                 } => {
                     let mut node = WorldVocoderNode::new();
                     node.pitch_semitones = *pitch_semitones;
                     node.formant_semitones = *formant_semitones;
+                    if !harmonic_gains.is_empty() {
+                        node.harmonic_gains = harmonic_gains.clone();
+                    }
+                    node.spectral_mode = if *use_harmonic_gains {
+                        crate::nodes::effects::SpectralMode::HarmonicGains
+                    } else {
+                        crate::nodes::effects::SpectralMode::FormantShift
+                    };
                     node.block_ms = *block_ms;
                     // ブロックサイズをボコーダーに反映
                     if let Some(mut vocoder) = node.vocoder.try_lock() {

@@ -22,7 +22,7 @@ pub use pitch_shifter::{
     DEFAULT_PITCH_BUFFER_SIZE,
 };
 pub use spectrum::SpectrumAnalyzer;
-pub use world_vocoder::WorldVocoder;
+pub use world_vocoder::{WorldVocoder, DEFAULT_NUM_HARMONICS};
 
 /// Hann窓を生成する共通関数
 pub fn create_hann_window(size: usize) -> Vec<f32> {

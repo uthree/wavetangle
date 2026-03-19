@@ -261,6 +261,9 @@ impl AudioGraphProcessor {
                 EffectNodeType::WorldVocoder {
                     pitch_semitones: vocoder_node.pitch_semitones,
                     formant_semitones: vocoder_node.formant_semitones,
+                    harmonic_gains: vocoder_node.harmonic_gains.clone(),
+                    use_harmonic_gains: vocoder_node.spectral_mode
+                        == crate::nodes::effects::SpectralMode::HarmonicGains,
                     vocoder: vocoder_node.vocoder.clone(),
                 },
                 1,

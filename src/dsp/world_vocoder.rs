@@ -227,8 +227,9 @@ impl WorldVocoder {
         sample_rate: i32,
         fft_size: usize,
     ) {
-        // Hann窓のキャッシュ（サイズごと）
         let mut window_cache: Option<(usize, Vec<f32>)> = None;
+        // 前ブロック合成結果の後半（位相アライメント参照用）
+        let mut prev_block_tail: Vec<f32> = Vec::new();
 
         while running.load(Ordering::Relaxed) {
             let (item, pitch_mode, formant, harmonics, f0_method) = {
@@ -258,17 +259,30 @@ impl WorldVocoder {
                     f0_method,
                 );
 
+                // 位相アライメント: 前ブロック末尾との相関が最大になるオフセットを探索
+                let aligned = if !prev_block_tail.is_empty() && synthesized.len() > 0 {
+                    let best_offset =
+                        find_best_phase_offset(&prev_block_tail, &synthesized, sample_rate);
+                    apply_offset(&synthesized, best_offset)
+                } else {
+                    synthesized
+                };
+
+                // 次回の位相アライメント用に後半を保存
+                let half = aligned.len() / 2;
+                prev_block_tail = aligned[half..].to_vec();
+
                 // Hann窓を適用
                 let window = match &window_cache {
-                    Some((size, w)) if *size == synthesized.len() => w,
+                    Some((size, w)) if *size == aligned.len() => w,
                     _ => {
-                        let w = create_hann_window(synthesized.len());
-                        window_cache = Some((synthesized.len(), w));
+                        let w = create_hann_window(aligned.len());
+                        window_cache = Some((aligned.len(), w));
                         &window_cache.as_ref().unwrap().1
                     }
                 };
 
-                let windowed: Vec<f32> = synthesized
+                let windowed: Vec<f32> = aligned
                     .iter()
                     .zip(window.iter())
                     .map(|(&s, &w)| s * w)
@@ -499,4 +513,97 @@ fn apply_harmonic_gains(
             spectrogram[[frame, bin]] *= bin_gains[bin];
         }
     }
+}
+
+/// 位相アライメント: 前ブロック末尾と新ブロック先頭の相互相関が最大になるオフセットを探索
+/// 戻り値: 最適オフセット（サンプル数、負=前にシフト、正=後にシフト）
+fn find_best_phase_offset(prev_tail: &[f32], new_block: &[f32], sample_rate: i32) -> i32 {
+    // 相関に使う長さ（前ブロック末尾の長さ、最大で新ブロックの1/4）
+    let corr_len = prev_tail.len().min(new_block.len() / 4).min(2048);
+    if corr_len < 16 {
+        return 0;
+    }
+
+    // 探索範囲: ±(1周期分程度)。低音100Hzの1周期 = sample_rate/100 サンプル
+    let max_search = (sample_rate as i32 / 100).min(new_block.len() as i32 / 4);
+
+    let mut best_offset = 0i32;
+    let mut best_corr = f32::MIN;
+
+    // 粗い探索（4サンプル刻み）
+    let coarse_step = 4i32.max(max_search / 64);
+    for offset in (-max_search..=max_search).step_by(coarse_step as usize) {
+        let corr = normalized_correlation(prev_tail, new_block, offset, corr_len);
+        if corr > best_corr {
+            best_corr = corr;
+            best_offset = offset;
+        }
+    }
+
+    // 細かい探索（1サンプル刻み、粗い探索の周辺）
+    let fine_range = coarse_step;
+    let fine_best_base = best_offset;
+    for offset in (fine_best_base - fine_range)..=(fine_best_base + fine_range) {
+        if offset < -max_search || offset > max_search {
+            continue;
+        }
+        let corr = normalized_correlation(prev_tail, new_block, offset, corr_len);
+        if corr > best_corr {
+            best_corr = corr;
+            best_offset = offset;
+        }
+    }
+
+    best_offset
+}
+
+/// 正規化相互相関を計算
+/// prev_tail の末尾 corr_len サンプルと、new_block の (offset..) から corr_len サンプルを比較
+fn normalized_correlation(
+    prev_tail: &[f32],
+    new_block: &[f32],
+    offset: i32,
+    corr_len: usize,
+) -> f32 {
+    let ref_start = prev_tail.len().saturating_sub(corr_len);
+    let new_start = offset.max(0) as usize;
+
+    if new_start + corr_len > new_block.len() {
+        return f32::MIN;
+    }
+
+    let mut correlation = 0.0f32;
+    let mut energy_ref = 0.0f32;
+    let mut energy_new = 0.0f32;
+
+    // サブサンプリングで高速化
+    const STEP: usize = 4;
+    for i in (0..corr_len).step_by(STEP) {
+        let r = prev_tail[ref_start + i];
+        let n = new_block[new_start + i];
+        correlation += r * n;
+        energy_ref += r * r;
+        energy_new += n * n;
+    }
+
+    let denom = (energy_ref * energy_new).sqrt();
+    if denom > 1e-10 {
+        correlation / denom
+    } else {
+        0.0
+    }
+}
+
+/// オフセットを適用してブロックをシフト（循環シフト）
+fn apply_offset(block: &[f32], offset: i32) -> Vec<f32> {
+    if offset == 0 || block.is_empty() {
+        return block.to_vec();
+    }
+    let len = block.len();
+    let shift = ((offset % len as i32) + len as i32) as usize % len;
+    let mut result = vec![0.0f32; len];
+    for i in 0..len {
+        result[i] = block[(i + shift) % len];
+    }
+    result
 }

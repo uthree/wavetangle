@@ -407,6 +407,8 @@ pub struct WorldVocoderNode {
     pub pitch_semitones: f32,
     /// フォルマントシフト量（半音単位、-24〜+24）
     pub formant_semitones: f32,
+    /// ブロックサイズ（ミリ秒、大きいほど安定するがレイテンシ増加）
+    pub block_ms: f32,
     /// バッファ管理
     pub buffers: NodeBuffers,
     /// アクティブ状態
@@ -420,21 +422,30 @@ impl Clone for WorldVocoderNode {
         Self {
             pitch_semitones: self.pitch_semitones,
             formant_semitones: self.formant_semitones,
+            block_ms: self.block_ms,
             buffers: self.buffers.clone(),
             is_active: self.is_active,
-            vocoder: Arc::new(Mutex::new(crate::dsp::WorldVocoder::new(48000.0))),
+            vocoder: Arc::new(Mutex::new(crate::dsp::WorldVocoder::with_block_ms(
+                48000.0,
+                self.block_ms,
+            ))),
         }
     }
 }
 
 impl WorldVocoderNode {
     pub fn new() -> Self {
+        let default_block_ms = 80.0;
         Self {
             pitch_semitones: 0.0,
             formant_semitones: 0.0,
+            block_ms: default_block_ms,
             buffers: NodeBuffers::single_output(),
             is_active: false,
-            vocoder: Arc::new(Mutex::new(crate::dsp::WorldVocoder::new(48000.0))),
+            vocoder: Arc::new(Mutex::new(crate::dsp::WorldVocoder::with_block_ms(
+                48000.0,
+                default_block_ms,
+            ))),
         }
     }
 }
@@ -475,9 +486,25 @@ impl NodeUI for WorldVocoderNode {
                     .fixed_decimals(1),
             );
 
-            // 推定レイテンシ表示
             ui.separator();
-            ui.label("Latency: ~100 ms");
+
+            // ブロックサイズ（レイテンシ vs 安定性のトレードオフ）
+            ui.label("Block Size:");
+            let old_block_ms = self.block_ms;
+            ui.add(
+                egui::Slider::new(&mut self.block_ms, 40.0..=200.0)
+                    .suffix(" ms")
+                    .fixed_decimals(0),
+            );
+            if (self.block_ms - old_block_ms).abs() > 0.5 {
+                if let Some(mut vocoder) = self.vocoder.try_lock() {
+                    let sr = vocoder.sample_rate();
+                    let new_size = ((sr * self.block_ms / 1000.0) as usize).max(1024);
+                    vocoder.set_block_size(new_size);
+                }
+            }
+
+            ui.label(format!("Latency: ~{:.0} ms", self.block_ms));
 
             // リセットボタン
             if ui.button("Reset").clicked() {

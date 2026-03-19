@@ -30,6 +30,9 @@ fn default_search_range_ratio() -> f32 {
 fn default_correlation_length_ratio() -> f32 {
     0.75
 }
+fn default_block_ms() -> f32 {
+    80.0
+}
 
 /// ノードの位置情報
 #[derive(Clone, Serialize, Deserialize)]
@@ -103,6 +106,8 @@ pub enum SavedNode {
     WorldVocoder {
         pitch_semitones: f32,
         formant_semitones: f32,
+        #[serde(default = "default_block_ms")]
+        block_ms: f32,
     },
 }
 
@@ -222,6 +227,7 @@ impl ProjectFile {
                 AudioNode::WorldVocoder(n) => SavedNode::WorldVocoder {
                     pitch_semitones: n.pitch_semitones,
                     formant_semitones: n.formant_semitones,
+                    block_ms: n.block_ms,
                 },
             };
 
@@ -368,10 +374,18 @@ impl ProjectFile {
                 SavedNode::WorldVocoder {
                     pitch_semitones,
                     formant_semitones,
+                    block_ms,
                 } => {
                     let mut node = WorldVocoderNode::new();
                     node.pitch_semitones = *pitch_semitones;
                     node.formant_semitones = *formant_semitones;
+                    node.block_ms = *block_ms;
+                    // ブロックサイズをボコーダーに反映
+                    if let Some(mut vocoder) = node.vocoder.try_lock() {
+                        let sr = vocoder.sample_rate();
+                        let new_size = ((sr * block_ms / 1000.0) as usize).max(1024);
+                        vocoder.set_block_size(new_size);
+                    }
                     AudioNode::WorldVocoder(node)
                 }
             };

@@ -1,218 +1,349 @@
 //! WORLDアルゴリズムベースの声質変換DSPモジュール
 //!
-//! 入力音声を分析(F0, スペクトル包絡, 非周期性指標)し、
-//! ピッチシフトとフォルマントシフトを適用して再合成する。
+//! 入力音声をブロック単位で蓄積し、ワーカースレッドでWORLD分析→パラメータ変換→再合成を行う。
+//! 合成結果は入力と同じサンプル数にリサンプルし、入出力レートを厳密に一致させる。
+//! 出力が間に合わない場合は入力信号をパススルーし、音途切れを防止する。
+
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
 
 use ndarray::Array2;
+use parking_lot::Mutex;
 
-/// WORLDボコーダーのデフォルトフレーム周期 (ms)
+/// フレーム周期 (ms)
 const FRAME_PERIOD: f64 = 5.0;
+/// ブロック境界のクロスフェード長（サンプル数）
+const CROSSFADE_LEN: usize = 128;
+/// ピッチ推定・分析のオーバーラップ（前ブロック末尾から引き継ぐサンプル数）
+const ANALYSIS_OVERLAP: usize = 2048;
+
+/// ワーカースレッドとの共有状態
+struct SharedState {
+    /// ワーカーへの入力キュー（(分析窓全体, 出力サンプル数)）
+    input_queue: VecDeque<(Vec<f64>, usize)>,
+    /// ワーカーからの出力キュー（処理済み、target_lenにリサンプル済み）
+    output_queue: VecDeque<Vec<f64>>,
+    /// パラメータ
+    pitch_shift_semitones: f64,
+    formant_shift_semitones: f64,
+}
 
 /// WORLDボコーダー処理
-///
-/// ブロック単位で音声を蓄積し、WORLDの分析→変換→再合成を行う。
-/// overlap-add方式で出力を生成し、レイテンシを最小化する。
 pub struct WorldVocoder {
-    /// サンプルレート
-    sample_rate: i32,
-    /// ピッチシフト量（半音）
-    pitch_shift_semitones: f64,
-    /// フォルマントシフト量（半音）
-    formant_shift_semitones: f64,
-    /// 入力バッファ（f64精度で蓄積）
+    shared: Arc<Mutex<SharedState>>,
+    running: Arc<AtomicBool>,
+    worker_handle: Option<thread::JoinHandle<()>>,
+    /// 入力蓄積バッファ
     input_buffer: Vec<f64>,
-    /// 出力バッファ（再合成済みサンプル）
-    output_buffer: Vec<f32>,
-    /// 処理ブロックサイズ（サンプル数）
+    /// 処理済み出力キュー（ワーカーからの結果）
+    output_buffer: VecDeque<f32>,
+    /// パススルー用入力キュー（出力が間に合わない時のフォールバック）
+    dry_buffer: VecDeque<f32>,
+    /// 分析ブロックサイズ
     block_size: usize,
-    /// ホップサイズ（新しいブロックごとにシフトする量）
-    hop_size: usize,
-    /// フェードイン/アウト用の窓関数
-    fade_window: Vec<f64>,
-    /// 前回のブロックの末尾部分（クロスフェード用）
-    prev_tail: Vec<f64>,
+    sample_rate: f32,
+    /// 前ブロック末尾（分析オーバーラップ用）
+    prev_block_tail: Vec<f64>,
+    /// 前ブロック末尾（クロスフェード用）
+    prev_tail: [f64; CROSSFADE_LEN],
+    has_prev_tail: bool,
 }
 
 impl WorldVocoder {
     pub fn new(sample_rate: f32) -> Self {
+        Self::with_block_ms(sample_rate, 80.0)
+    }
+
+    pub fn with_block_ms(sample_rate: f32, block_ms: f32) -> Self {
         let sr = sample_rate as i32;
-        // 分析に十分なブロックサイズ（約100ms）
-        let block_size = (sample_rate * 0.1) as usize;
-        // 50%オーバーラップ
-        let hop_size = block_size / 2;
+        let fft_size = world_dsp::get_fft_size_for_cheaptrick(sr, 71.0);
+        let block_size = ((sample_rate * block_ms / 1000.0) as usize).max(1024);
 
-        // クロスフェード窓を生成
-        let overlap = block_size - hop_size;
-        let fade_window: Vec<f64> = (0..overlap)
-            .map(|i| {
-                let t = i as f64 / overlap as f64;
-                0.5 * (1.0 - (std::f64::consts::PI * t).cos())
-            })
-            .collect();
-
-        Self {
-            sample_rate: sr,
+        let shared = Arc::new(Mutex::new(SharedState {
+            input_queue: VecDeque::new(),
+            output_queue: VecDeque::new(),
             pitch_shift_semitones: 0.0,
             formant_shift_semitones: 0.0,
+        }));
+
+        let running = Arc::new(AtomicBool::new(true));
+
+        let worker_shared = shared.clone();
+        let worker_running = running.clone();
+        let worker_handle = thread::spawn(move || {
+            Self::worker_loop(worker_shared, worker_running, sr, fft_size);
+        });
+
+        Self {
+            shared,
+            running,
+            worker_handle: Some(worker_handle),
             input_buffer: Vec::with_capacity(block_size * 2),
-            output_buffer: Vec::new(),
+            output_buffer: VecDeque::with_capacity(block_size * 4),
+            dry_buffer: VecDeque::with_capacity(block_size * 4),
             block_size,
-            hop_size,
-            fade_window,
-            prev_tail: Vec::new(),
+            sample_rate,
+            prev_block_tail: Vec::new(),
+            prev_tail: [0.0; CROSSFADE_LEN],
+            has_prev_tail: false,
+        }
+    }
+
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate
+    }
+
+    pub fn set_block_size(&mut self, new_block_size: usize) {
+        let new_block_size = new_block_size.max(1024);
+        if new_block_size != self.block_size {
+            self.block_size = new_block_size;
+            self.input_buffer.clear();
+            self.prev_block_tail.clear();
+            self.has_prev_tail = false;
         }
     }
 
     pub fn set_pitch_shift(&mut self, semitones: f64) {
-        self.pitch_shift_semitones = semitones;
+        self.shared.lock().pitch_shift_semitones = semitones;
     }
 
     pub fn set_formant_shift(&mut self, semitones: f64) {
-        self.formant_shift_semitones = semitones;
+        self.shared.lock().formant_shift_semitones = semitones;
     }
 
-    /// 入力サンプルを処理して出力サンプルを生成
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        // 入力をf64に変換してバッファに追加
-        for &s in input {
-            self.input_buffer.push(s as f64);
-        }
+        // 入力を蓄積
+        self.input_buffer.extend(input.iter().map(|&s| s as f64));
 
-        // 十分なサンプルが溜まったら処理
+        // パススルー用にも入力を保持
+        self.dry_buffer.extend(input.iter());
+
+        // ブロック単位でワーカーに投入
         while self.input_buffer.len() >= self.block_size {
-            let block: Vec<f64> = self.input_buffer[..self.block_size].to_vec();
-            self.input_buffer.drain(..self.hop_size);
+            let block: Vec<f64> = self.input_buffer.drain(..self.block_size).collect();
 
-            let processed = self.process_block(&block);
-            self.overlap_add(&processed);
+            // 前ブロック末尾 + 現ブロックの連結データを作成
+            let mut analysis_block =
+                Vec::with_capacity(self.prev_block_tail.len() + block.len());
+            analysis_block.extend_from_slice(&self.prev_block_tail);
+            analysis_block.extend_from_slice(&block);
+
+            // 現ブロックの末尾をオーバーラップとして保存
+            let tail_start = block.len().saturating_sub(ANALYSIS_OVERLAP);
+            self.prev_block_tail = block[tail_start..].to_vec();
+
+            self.shared
+                .lock()
+                .input_queue
+                .push_back((analysis_block, block.len()));
         }
 
-        // 出力バッファから必要な分だけコピー
-        let copy_len = output.len().min(self.output_buffer.len());
-        for i in 0..copy_len {
-            output[i] = self.output_buffer[i];
+        // ワーカーの処理結果を回収
+        let results: Vec<Vec<f64>> = {
+            let mut state = self.shared.lock();
+            state.output_queue.drain(..).collect()
+        };
+        for block in &results {
+            self.enqueue_block(block);
+            // 処理済み分のdryバッファを消費
+            let consume = block.len().min(self.dry_buffer.len());
+            self.dry_buffer.drain(..consume);
         }
-        // 残りは無音
-        for i in copy_len..output.len() {
-            output[i] = 0.0;
+
+        // 出力: 処理済みがあればそれを使い、なければパススルー
+        for sample in output.iter_mut() {
+            if let Some(s) = self.output_buffer.pop_front() {
+                *sample = s;
+            } else if let Some(s) = self.dry_buffer.pop_front() {
+                // 処理が追いつかない場合はパススルー
+                *sample = s;
+            } else {
+                *sample = 0.0;
+            }
         }
-        // 使用分を消費
-        if copy_len > 0 {
-            self.output_buffer.drain(..copy_len);
+    }
+
+    fn enqueue_block(&mut self, block: &[f64]) {
+        if block.is_empty() {
+            return;
+        }
+
+        if self.has_prev_tail && block.len() >= CROSSFADE_LEN {
+            for i in 0..CROSSFADE_LEN {
+                let t = (i + 1) as f64 / (CROSSFADE_LEN + 1) as f64;
+                let mixed = self.prev_tail[i] * (1.0 - t) + block[i] * t;
+                self.output_buffer.push_back(mixed as f32);
+            }
+            for &s in &block[CROSSFADE_LEN..] {
+                self.output_buffer.push_back(s as f32);
+            }
+        } else {
+            for &s in block {
+                self.output_buffer.push_back(s as f32);
+            }
+        }
+
+        if block.len() >= CROSSFADE_LEN {
+            self.prev_tail
+                .copy_from_slice(&block[block.len() - CROSSFADE_LEN..]);
+            self.has_prev_tail = true;
+        }
+    }
+
+    fn worker_loop(
+        shared: Arc<Mutex<SharedState>>,
+        running: Arc<AtomicBool>,
+        sample_rate: i32,
+        fft_size: usize,
+    ) {
+        while running.load(Ordering::Relaxed) {
+            let (item, pitch, formant) = {
+                let mut state = shared.lock();
+                if let Some(item) = state.input_queue.pop_front() {
+                    (
+                        Some(item),
+                        state.pitch_shift_semitones,
+                        state.formant_shift_semitones,
+                    )
+                } else {
+                    (None, 0.0, 0.0)
+                }
+            };
+
+            if let Some((analysis_block, target_len)) = item {
+                let synthesized = Self::process_block(
+                    &analysis_block,
+                    target_len,
+                    sample_rate,
+                    fft_size,
+                    pitch,
+                    formant,
+                );
+                shared.lock().output_queue.push_back(synthesized);
+            } else {
+                thread::sleep(std::time::Duration::from_millis(1));
+            }
         }
     }
 
     /// 1ブロック分のWORLD分析→変換→再合成
-    fn process_block(&self, block: &[f64]) -> Vec<f64> {
-        let fs = self.sample_rate;
-        let f0_floor = 71.0;
-        let fft_size = world_dsp::get_fft_size_for_cheaptrick(fs, f0_floor);
+    fn process_block(
+        analysis_block: &[f64],
+        target_len: usize,
+        sample_rate: i32,
+        fft_size: usize,
+        pitch_shift_semitones: f64,
+        formant_shift_semitones: f64,
+    ) -> Vec<f64> {
+        // F0推定（YIN）
+        let yin = world_dsp::Yin::new(sample_rate);
+        let (temporal_positions, f0) = world_dsp::F0Estimator::estimate(&yin, analysis_block);
 
-        // F0推定（YINを使用、高速）
-        let yin = world_dsp::Yin::new(fs);
-        let (temporal_positions, f0) = world_dsp::F0Estimator::estimate(&yin, block);
+        if f0.is_empty() {
+            // 推定失敗時は入力末尾をそのまま返す
+            let start = analysis_block.len().saturating_sub(target_len);
+            return analysis_block[start..].to_vec();
+        }
 
-        // スペクトル包絡推定
-        let cheaptrick = world_dsp::CheapTrick::new(fs, fft_size);
-        let spectrogram = cheaptrick.estimate(block, &temporal_positions, &f0);
+        // スペクトル包絡推定（分析窓全体）
+        let cheaptrick = world_dsp::CheapTrick::new(sample_rate, fft_size);
+        let spectrogram = cheaptrick.estimate(analysis_block, &temporal_positions, &f0);
 
-        // 非周期性指標推定
-        let d4c = world_dsp::D4C::new(fs, fft_size);
-        let aperiodicity = d4c.estimate(block, &temporal_positions, &f0);
+        // 非周期性指標推定（分析窓全体）
+        let d4c = world_dsp::D4C::new(sample_rate, fft_size);
+        let aperiodicity = d4c.estimate(analysis_block, &temporal_positions, &f0);
 
-        // パラメータ変換
-        let pitch_ratio = 2.0_f64.powf(self.pitch_shift_semitones / 12.0);
-        let formant_ratio = 2.0_f64.powf(self.formant_shift_semitones / 12.0);
-
-        // ピッチシフト: F0を変更
+        // ピッチシフト
+        let pitch_ratio = 2.0_f64.powf(pitch_shift_semitones / 12.0);
         let modified_f0: Vec<f64> = f0
             .iter()
             .map(|&v| if v > 0.0 { v * pitch_ratio } else { 0.0 })
             .collect();
 
-        // フォルマントシフト: スペクトル包絡を周波数方向にシフト
+        // フォルマントシフト
+        let formant_ratio = 2.0_f64.powf(formant_shift_semitones / 12.0);
         let modified_spectrogram = if (formant_ratio - 1.0).abs() > 1e-6 {
-            self.shift_spectrogram(&spectrogram, formant_ratio)
+            shift_spectrogram(&spectrogram, formant_ratio)
         } else {
             spectrogram
         };
 
-        // 再合成
-        let synthesizer = world_dsp::Synthesizer::new(FRAME_PERIOD, fs, fft_size);
-        let result = synthesizer.synthesize(&modified_f0, &modified_spectrogram, &aperiodicity);
+        // 再合成（分析窓全体分）
+        let synthesizer = world_dsp::Synthesizer::new(FRAME_PERIOD, sample_rate, fft_size);
+        let full_result =
+            synthesizer.synthesize(&modified_f0, &modified_spectrogram, &aperiodicity);
+        let full = full_result.to_vec();
 
-        result.to_vec()
-    }
-
-    /// スペクトル包絡を周波数方向にシフト（フォルマント操作）
-    fn shift_spectrogram(&self, spectrogram: &Array2<f64>, ratio: f64) -> Array2<f64> {
-        let (num_frames, freq_bins) = spectrogram.dim();
-        let mut shifted = Array2::zeros((num_frames, freq_bins));
-
-        for frame in 0..num_frames {
-            for bin in 0..freq_bins {
-                // 元の周波数位置（シフト後の位置から逆算）
-                let src_bin = bin as f64 / ratio;
-                let src_idx = src_bin.floor() as usize;
-                let frac = src_bin - src_idx as f64;
-
-                if src_idx + 1 < freq_bins {
-                    // 線形補間
-                    shifted[[frame, bin]] = spectrogram[[frame, src_idx]] * (1.0 - frac)
-                        + spectrogram[[frame, src_idx + 1]] * frac;
-                } else if src_idx < freq_bins {
-                    shifted[[frame, bin]] = spectrogram[[frame, src_idx]];
-                }
-                // 範囲外は0のまま
-            }
-        }
-
-        shifted
-    }
-
-    /// overlap-addで出力バッファに追加
-    fn overlap_add(&mut self, processed: &[f64]) {
-        if processed.is_empty() {
-            return;
-        }
-
-        let overlap_len = self.block_size - self.hop_size;
-
-        if self.prev_tail.is_empty() {
-            // 最初のブロック: hop_size分だけ出力、残りは保存
-            for i in 0..processed.len().min(self.hop_size) {
-                self.output_buffer.push(processed[i] as f32);
-            }
-            if processed.len() > self.hop_size {
-                self.prev_tail = processed[self.hop_size..].to_vec();
-            }
+        // 末尾 target_len サンプルを取り出してリサンプル
+        if full.len() >= target_len {
+            let start = full.len() - target_len;
+            resample_linear(&full[start..], target_len)
         } else {
-            // クロスフェード部分
-            let cross_len = overlap_len.min(self.prev_tail.len()).min(processed.len());
-            for i in 0..cross_len {
-                let fade_in = if i < self.fade_window.len() {
-                    self.fade_window[i]
-                } else {
-                    1.0
-                };
-                let fade_out = 1.0 - fade_in;
-                let mixed = self.prev_tail[i] * fade_out + processed[i] * fade_in;
-                self.output_buffer.push(mixed as f32);
-            }
+            resample_linear(&full, target_len)
+        }
+    }
+}
 
-            // クロスフェード後の新しいデータ（hop_size分まで）
-            let new_start = cross_len;
-            let new_end = processed.len().min(self.hop_size + cross_len);
-            for i in new_start..new_end {
-                self.output_buffer.push(processed[i] as f32);
-            }
+impl Drop for WorldVocoder {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
 
-            // 残りは次のブロック用に保存
-            if processed.len() > self.hop_size {
-                self.prev_tail = processed[self.hop_size..].to_vec();
+/// 線形補間リサンプル
+fn resample_linear(input: &[f64], target_len: usize) -> Vec<f64> {
+    if input.is_empty() {
+        return vec![0.0; target_len];
+    }
+    if input.len() == target_len {
+        return input.to_vec();
+    }
+    if target_len == 1 {
+        return vec![input[0]];
+    }
+    let ratio = (input.len() - 1) as f64 / (target_len - 1) as f64;
+    (0..target_len)
+        .map(|i| {
+            let pos = i as f64 * ratio;
+            let idx = pos.floor() as usize;
+            let frac = pos - idx as f64;
+            if idx + 1 < input.len() {
+                input[idx] * (1.0 - frac) + input[idx + 1] * frac
             } else {
-                self.prev_tail.clear();
+                input[idx.min(input.len() - 1)]
+            }
+        })
+        .collect()
+}
+
+/// スペクトル包絡を周波数方向にシフト（フォルマント操作）
+fn shift_spectrogram(spectrogram: &Array2<f64>, ratio: f64) -> Array2<f64> {
+    let (num_frames, freq_bins) = spectrogram.dim();
+    let mut shifted = Array2::zeros((num_frames, freq_bins));
+
+    for frame in 0..num_frames {
+        for bin in 0..freq_bins {
+            let src_bin = bin as f64 / ratio;
+            let src_idx = src_bin.floor() as usize;
+            let frac = src_bin - src_idx as f64;
+
+            if src_idx + 1 < freq_bins {
+                shifted[[frame, bin]] = spectrogram[[frame, src_idx]] * (1.0 - frac)
+                    + spectrogram[[frame, src_idx + 1]] * frac;
+            } else if src_idx < freq_bins {
+                shifted[[frame, bin]] = spectrogram[[frame, src_idx]];
             }
         }
     }
+
+    shifted
 }

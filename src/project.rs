@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::EqPoint;
 use crate::nodes::{
     AddNode, AudioInputNode, AudioNode, AudioOutputNode, CompressorNode, FilterNode, FilterType,
-    GainNode, GraphicEqNode, MultiplyNode, SpectrumAnalyzerNode, WsolaPitchShiftNode,
+    GainNode, GraphicEqNode, MultiplyNode, SpectrumAnalyzerNode, WorldVocoderNode,
+    WsolaPitchShiftNode,
 };
 
 /// プロジェクトファイルのバージョン
@@ -98,6 +99,10 @@ pub enum SavedNode {
     GraphicEq {
         eq_points: Vec<SavedEqPoint>,
         show_spectrum: bool,
+    },
+    WorldVocoder {
+        pitch_semitones: f32,
+        formant_semitones: f32,
     },
 }
 
@@ -213,6 +218,10 @@ impl ProjectFile {
                 AudioNode::GraphicEq(n) => SavedNode::GraphicEq {
                     eq_points: n.eq_points.iter().map(SavedEqPoint::from).collect(),
                     show_spectrum: n.show_spectrum,
+                },
+                AudioNode::WorldVocoder(n) => SavedNode::WorldVocoder {
+                    pitch_semitones: n.pitch_semitones,
+                    formant_semitones: n.formant_semitones,
                 },
             };
 
@@ -355,6 +364,15 @@ impl ProjectFile {
                     // EQカーブを更新
                     node.graphic_eq.lock().update_curve(&node.eq_points);
                     AudioNode::GraphicEq(node)
+                }
+                SavedNode::WorldVocoder {
+                    pitch_semitones,
+                    formant_semitones,
+                } => {
+                    let mut node = WorldVocoderNode::new();
+                    node.pitch_semitones = *pitch_semitones;
+                    node.formant_semitones = *formant_semitones;
+                    AudioNode::WorldVocoder(node)
                 }
             };
 

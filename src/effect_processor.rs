@@ -66,6 +66,11 @@ pub enum EffectNodeType {
     GraphicEq {
         graphic_eq: Arc<Mutex<crate::dsp::GraphicEq>>,
     },
+    WorldVocoder {
+        pitch_semitones: f32,
+        formant_semitones: f32,
+        vocoder: Arc<Mutex<crate::dsp::WorldVocoder>>,
+    },
     /// パススルー - データをそのまま出力にコピー（出力ノードへのルーティング用）
     PassThrough,
 }
@@ -372,6 +377,18 @@ impl EffectProcessor {
                 let mut eq = graphic_eq.lock();
                 let mut output = vec![0.0; input_a.len()];
                 eq.process(&input_a, &mut output);
+                output
+            }
+            EffectNodeType::WorldVocoder {
+                pitch_semitones,
+                formant_semitones,
+                vocoder,
+            } => {
+                let mut vocoder = vocoder.lock();
+                vocoder.set_pitch_shift(*pitch_semitones as f64);
+                vocoder.set_formant_shift(*formant_semitones as f64);
+                let mut output = vec![0.0; input_a.len()];
+                vocoder.process(&input_a, &mut output);
                 output
             }
             EffectNodeType::PassThrough => {

@@ -397,6 +397,98 @@ impl NodeUI for WsolaPitchShiftNode {
 }
 
 // ============================================================================
+// WorldVocoderNode - WORLD声質変換
+// ============================================================================
+
+/// WORLDアルゴリズムベースの声質変換ノード
+/// ピッチシフトとフォルマントシフトを独立に制御可能
+pub struct WorldVocoderNode {
+    /// ピッチシフト量（半音単位、-24〜+24）
+    pub pitch_semitones: f32,
+    /// フォルマントシフト量（半音単位、-24〜+24）
+    pub formant_semitones: f32,
+    /// バッファ管理
+    pub buffers: NodeBuffers,
+    /// アクティブ状態
+    pub is_active: bool,
+    /// WORLDボコーダー（スレッドセーフ）
+    pub vocoder: Arc<Mutex<crate::dsp::WorldVocoder>>,
+}
+
+impl Clone for WorldVocoderNode {
+    fn clone(&self) -> Self {
+        Self {
+            pitch_semitones: self.pitch_semitones,
+            formant_semitones: self.formant_semitones,
+            buffers: self.buffers.clone(),
+            is_active: self.is_active,
+            vocoder: Arc::new(Mutex::new(crate::dsp::WorldVocoder::new(48000.0))),
+        }
+    }
+}
+
+impl WorldVocoderNode {
+    pub fn new() -> Self {
+        Self {
+            pitch_semitones: 0.0,
+            formant_semitones: 0.0,
+            buffers: NodeBuffers::single_io(),
+            is_active: false,
+            vocoder: Arc::new(Mutex::new(crate::dsp::WorldVocoder::new(48000.0))),
+        }
+    }
+}
+
+impl Default for WorldVocoderNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl_input_port_nb!(WorldVocoderNode, ["In"]);
+impl_single_output_port_nb!(WorldVocoderNode);
+
+impl NodeUI for WorldVocoderNode {
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn set_active(&mut self, active: bool) {
+        self.is_active = active;
+    }
+
+    fn show_body(&mut self, ui: &mut Ui, _ctx: &NodeUIContext) {
+        ui.vertical(|ui| {
+            ui.set_max_width(180.0);
+
+            ui.label("Pitch Shift:");
+            ui.add(
+                egui::Slider::new(&mut self.pitch_semitones, -24.0..=24.0)
+                    .suffix(" st")
+                    .fixed_decimals(1),
+            );
+
+            ui.label("Formant Shift:");
+            ui.add(
+                egui::Slider::new(&mut self.formant_semitones, -24.0..=24.0)
+                    .suffix(" st")
+                    .fixed_decimals(1),
+            );
+
+            // 推定レイテンシ表示
+            ui.separator();
+            ui.label("Latency: ~100 ms");
+
+            // リセットボタン
+            if ui.button("Reset").clicked() {
+                self.pitch_semitones = 0.0;
+                self.formant_semitones = 0.0;
+            }
+        });
+    }
+}
+
+// ============================================================================
 // GraphicEqNode - グラフィックイコライザー
 // ============================================================================
 

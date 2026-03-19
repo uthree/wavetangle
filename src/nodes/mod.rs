@@ -20,7 +20,8 @@ pub const EQ_FFT_SIZE: usize = 2048;
 // サブモジュールからの公開re-export
 pub use analyzer::SpectrumAnalyzerNode;
 pub use effects::{
-    CompressorNode, FilterNode, FilterType, GainNode, GraphicEqNode, WsolaPitchShiftNode,
+    CompressorNode, FilterNode, FilterType, GainNode, GraphicEqNode, WorldVocoderNode,
+    WsolaPitchShiftNode,
 };
 pub use io::{AudioInputNode, AudioOutputNode};
 pub use math::{AddNode, MultiplyNode};
@@ -600,6 +601,7 @@ pub enum AudioNode {
     Compressor(CompressorNode),
     WsolaPitchShift(WsolaPitchShiftNode),
     GraphicEq(GraphicEqNode),
+    WorldVocoder(WorldVocoderNode),
 }
 
 /// デリゲート用マクロ
@@ -616,6 +618,7 @@ macro_rules! delegate {
             AudioNode::Compressor(n) => n.$method($($args),*),
             AudioNode::WsolaPitchShift(n) => n.$method($($args),*),
             AudioNode::GraphicEq(n) => n.$method($($args),*),
+            AudioNode::WorldVocoder(n) => n.$method($($args),*),
         }
     };
 }
@@ -635,6 +638,7 @@ impl AudioNode {
             AudioNode::Compressor(_) => "Compressor",
             AudioNode::WsolaPitchShift(_) => "WSOLA Pitch Shift",
             AudioNode::GraphicEq(_) => "Graphic EQ",
+            AudioNode::WorldVocoder(_) => "WORLD Vocoder",
         }
     }
 

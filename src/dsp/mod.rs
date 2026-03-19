@@ -10,6 +10,7 @@ mod graphic_eq;
 pub mod interpolation;
 mod pitch_shifter;
 mod spectrum;
+mod world_vocoder;
 mod yin;
 
 // Re-exports
@@ -21,6 +22,7 @@ pub use pitch_shifter::{
     DEFAULT_PITCH_BUFFER_SIZE,
 };
 pub use spectrum::SpectrumAnalyzer;
+pub use world_vocoder::WorldVocoder;
 
 /// Hann窓を生成する共通関数
 pub fn create_hann_window(size: usize) -> Vec<f32> {

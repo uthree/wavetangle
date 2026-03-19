@@ -271,6 +271,14 @@ impl AudioGraphProcessor {
                 },
                 1,
             ),
+            AudioNode::WorldVocoder(vocoder_node) => (
+                EffectNodeType::WorldVocoder {
+                    pitch_semitones: vocoder_node.pitch_semitones,
+                    formant_semitones: vocoder_node.formant_semitones,
+                    vocoder: vocoder_node.vocoder.clone(),
+                },
+                1,
+            ),
             // 入出力ノードはエフェクトノードではない
             AudioNode::AudioInput(_) | AudioNode::AudioOutput(_) => return None,
         };

@@ -13,7 +13,7 @@ src/
 ├── nodes/               # オーディオノードの定義
 │   ├── mod.rs           # AudioNode enum、共通型、トレイト、テスト
 │   ├── io.rs            # AudioInputNode, AudioOutputNode
-│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, GraphicEqNode
+│   ├── effects.rs       # GainNode, FilterNode, CompressorNode, WsolaPitchShiftNode, GraphicEqNode, WorldVocoderNode
 │   ├── math.rs          # AddNode, MultiplyNode
 │   └── analyzer.rs      # SpectrumAnalyzerNode
 ├── dsp/                 # DSPアルゴリズム（モジュール分割）
@@ -24,6 +24,7 @@ src/
 │   ├── pitch_shifter.rs # WSOLAピッチシフター
 │   ├── graphic_eq.rs    # グラフィックEQ
 │   ├── interpolation.rs # 補間アルゴリズム（Interpolator trait）
+│   ├── world_vocoder.rs # WORLDボコーダー（分析・変換・再合成）
 │   └── yin.rs           # YINピッチ検出
 ├── audio.rs             # cpalを使用したオーディオシステム
 ├── effect_processor.rs  # エフェクト処理専用スレッド
@@ -122,6 +123,7 @@ UI描画時に必要なコンテキストを保持する構造体：
 - `CompressorNode` (effects.rs): コンプレッサー（1入力1出力、Threshold、Ratio、Attack、Release、Makeup Gain）
 - `WsolaPitchShiftNode` (effects.rs): WSOLAピッチシフター（1入力1出力、波形類似度ベースのピッチシフト、-12〜+12半音）
 - `GraphicEqNode` (effects.rs): グラフィックEQ（1入力1出力、FFTベースの周波数ゲイン調整、egui_plotによるカーブエディタUI、入力スペクトラム表示統合）
+- `WorldVocoderNode` (effects.rs): WORLDボコーダー（1入力1出力、world-dspクレートによる分析・再合成、ピッチシフト-24〜+24半音、フォルマントシフト-24〜+24半音）
 
 ノード生成は直接enumバリアントを構築：
 - `AudioNode::AudioInput(AudioInputNode::new(device_name, channels))`

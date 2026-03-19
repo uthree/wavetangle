@@ -6,7 +6,8 @@ use egui_snarl::{InPin, NodeId, OutPin, Snarl};
 
 use crate::nodes::{
     AddNode, AudioInputNode, AudioNode, AudioOutputNode, CompressorNode, FilterNode, GainNode,
-    GraphicEqNode, MultiplyNode, PinType, SpectrumAnalyzerNode, WsolaPitchShiftNode,
+    GraphicEqNode, MultiplyNode, PinType, SpectrumAnalyzerNode, WorldVocoderNode,
+    WsolaPitchShiftNode,
 };
 
 /// ピンタイプに応じた色を取得
@@ -228,6 +229,13 @@ impl SnarlViewer<AudioNode> for AudioGraphViewer {
             }
             if ui.button("Graphic EQ").clicked() {
                 snarl.insert_node(pos, AudioNode::GraphicEq(GraphicEqNode::new()));
+                ui.close();
+            }
+            if ui.button("WORLD Vocoder").clicked() {
+                snarl.insert_node(
+                    pos,
+                    AudioNode::WorldVocoder(WorldVocoderNode::new()),
+                );
                 ui.close();
             }
         });

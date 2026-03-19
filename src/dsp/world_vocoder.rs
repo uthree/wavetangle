@@ -14,8 +14,6 @@ use parking_lot::Mutex;
 
 /// フレーム周期 (ms)
 const FRAME_PERIOD: f64 = 5.0;
-/// デフォルトの倍音制御数
-pub const DEFAULT_NUM_HARMONICS: usize = 8;
 
 /// F0推定アルゴリズム
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,9 +41,6 @@ struct SharedState {
     /// パラメータ
     pitch_mode: PitchMode,
     formant_shift_semitones: f64,
-    /// 倍音振幅係数（index 0 = 基本波, index 1 = 第2倍音, ...）
-    /// 1.0 = 変化なし, 0.0 = 消音, 2.0 = 2倍
-    harmonic_gains: Vec<f64>,
     /// F0推定アルゴリズム
     f0_method: F0Method,
 }
@@ -89,7 +84,6 @@ impl WorldVocoder {
             output_queue: VecDeque::new(),
             pitch_mode: PitchMode::Shift(0.0),
             formant_shift_semitones: 0.0,
-            harmonic_gains: vec![1.0; DEFAULT_NUM_HARMONICS],
             f0_method: F0Method::Yin,
         }));
 
@@ -141,10 +135,6 @@ impl WorldVocoder {
 
     pub fn set_formant_shift(&mut self, semitones: f64) {
         self.shared.lock().formant_shift_semitones = semitones;
-    }
-
-    pub fn set_harmonic_gains(&mut self, gains: &[f64]) {
-        self.shared.lock().harmonic_gains = gains.to_vec();
     }
 
     pub fn set_f0_method(&mut self, method: F0Method) {
@@ -232,18 +222,17 @@ impl WorldVocoder {
         let mut prev_block_tail: Vec<f32> = Vec::new();
 
         while running.load(Ordering::Relaxed) {
-            let (item, pitch_mode, formant, harmonics, f0_method) = {
+            let (item, pitch_mode, formant, f0_method) = {
                 let mut state = shared.lock();
                 if let Some(item) = state.input_queue.pop_front() {
                     (
                         Some(item),
                         state.pitch_mode,
                         state.formant_shift_semitones,
-                        state.harmonic_gains.clone(),
                         state.f0_method,
                     )
                 } else {
-                    (None, PitchMode::Shift(0.0), 0.0, Vec::new(), F0Method::Yin)
+                    (None, PitchMode::Shift(0.0), 0.0, F0Method::Yin)
                 }
             };
 
@@ -255,7 +244,6 @@ impl WorldVocoder {
                     fft_size,
                     pitch_mode,
                     formant,
-                    &harmonics,
                     f0_method,
                 );
 
@@ -303,7 +291,6 @@ impl WorldVocoder {
         fft_size: usize,
         pitch_mode: PitchMode,
         formant_shift_semitones: f64,
-        harmonic_gains: &[f64],
         f0_method: F0Method,
     ) -> Vec<f32> {
         // F0推定（選択されたアルゴリズムを使用）
@@ -355,17 +342,6 @@ impl WorldVocoder {
         } else {
             spectrogram
         };
-
-        // 倍音振幅制御
-        if !harmonic_gains.is_empty() {
-            apply_harmonic_gains(
-                &mut modified_spectrogram,
-                &f0,
-                harmonic_gains,
-                sample_rate,
-                fft_size,
-            );
-        }
 
         // 再合成
         let synthesizer = world_dsp::Synthesizer::new(FRAME_PERIOD, sample_rate, fft_size);
@@ -450,69 +426,6 @@ fn shift_spectrogram(spectrogram: &Array2<f64>, ratio: f64) -> Array2<f64> {
     }
 
     shifted
-}
-
-/// 倍音振幅制御: 各フレームのF0に基づいてn次倍音のスペクトル包絡にゲインを適用
-///
-/// CheapTrickの出力はパワースペクトル密度(PSD)なので、振幅ゲインgに対して
-/// g^2をPSDに乗算する必要がある（振幅 = sqrt(PSD)のため）。
-/// 各倍音の中心ビンにガウシアン重みでゲインを適用し、隣接倍音への干渉を防ぐ。
-fn apply_harmonic_gains(
-    spectrogram: &mut Array2<f64>,
-    f0: &[f64],
-    harmonic_gains: &[f64],
-    sample_rate: i32,
-    fft_size: usize,
-) {
-    let (num_frames, freq_bins) = spectrogram.dim();
-    let bin_freq = sample_rate as f64 / fft_size as f64;
-
-    for frame in 0..num_frames {
-        let frame_f0 = if frame < f0.len() { f0[frame] } else { 0.0 };
-        if frame_f0 <= 0.0 {
-            continue;
-        }
-
-        // 各ビンに適用するPSDゲインを計算
-        let mut bin_gains = vec![1.0_f64; freq_bins];
-
-        for (n, &gain) in harmonic_gains.iter().enumerate() {
-            if (gain - 1.0).abs() < 1e-6 {
-                continue;
-            }
-
-            let harmonic_freq = frame_f0 * (n + 1) as f64;
-            let center_bin = harmonic_freq / bin_freq;
-
-            if center_bin >= freq_bins as f64 {
-                break;
-            }
-
-            // PSDドメインのゲイン（振幅ゲインの2乗）
-            let psd_gain = gain * gain;
-
-            // σ = 倍音間隔の半分程度（F0/bin_freqが1倍音分のビン幅）
-            let sigma = (frame_f0 / bin_freq) * 0.35;
-            let sigma_sq = sigma * sigma;
-            let range = (sigma * 3.0).ceil() as i64;
-            let center = center_bin.round() as i64;
-
-            for offset in -range..=range {
-                let bin = center + offset;
-                if bin >= 0 && (bin as usize) < freq_bins {
-                    let dist = bin as f64 - center_bin;
-                    let weight = (-0.5 * dist * dist / sigma_sq).exp();
-                    // ガウシアン重みで1.0からpsd_gainへ補間
-                    let effective_gain = 1.0 + weight * (psd_gain - 1.0);
-                    bin_gains[bin as usize] *= effective_gain;
-                }
-            }
-        }
-
-        for bin in 0..freq_bins {
-            spectrogram[[frame, bin]] *= bin_gains[bin];
-        }
-    }
 }
 
 /// 位相アライメント: 前ブロック末尾と新ブロック先頭の相互相関が最大になるオフセットを探索

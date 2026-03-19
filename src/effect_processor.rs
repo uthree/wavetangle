@@ -63,8 +63,6 @@ pub enum EffectNodeType {
     WorldVocoder {
         pitch_mode: crate::dsp::PitchMode,
         formant_semitones: f32,
-        harmonic_gains: Vec<f32>,
-        use_harmonic_gains: bool,
         f0_method: crate::dsp::F0Method,
         vocoder: Arc<Mutex<crate::dsp::WorldVocoder>>,
     },
@@ -303,22 +301,13 @@ impl EffectProcessor {
             EffectNodeType::WorldVocoder {
                 pitch_mode,
                 formant_semitones,
-                harmonic_gains,
-                use_harmonic_gains,
                 f0_method,
                 vocoder,
             } => {
                 let mut vocoder = vocoder.lock();
                 vocoder.set_pitch_mode(*pitch_mode);
                 vocoder.set_f0_method(*f0_method);
-                if *use_harmonic_gains {
-                    vocoder.set_formant_shift(0.0);
-                    let gains_f64: Vec<f64> = harmonic_gains.iter().map(|&g| g as f64).collect();
-                    vocoder.set_harmonic_gains(&gains_f64);
-                } else {
-                    vocoder.set_formant_shift(*formant_semitones as f64);
-                    vocoder.set_harmonic_gains(&[]);
-                }
+                vocoder.set_formant_shift(*formant_semitones as f64);
                 let mut output = vec![0.0; input_a.len()];
                 vocoder.process(&input_a, &mut output);
                 output

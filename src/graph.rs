@@ -268,9 +268,6 @@ impl AudioGraphProcessor {
                         }
                     },
                     formant_semitones: vocoder_node.formant_semitones,
-                    harmonic_gains: vocoder_node.harmonic_gains.clone(),
-                    use_harmonic_gains: vocoder_node.spectral_mode
-                        == crate::nodes::effects::SpectralMode::HarmonicGains,
                     f0_method: vocoder_node.f0_method,
                     vocoder: vocoder_node.vocoder.clone(),
                 },

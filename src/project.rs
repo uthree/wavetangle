@@ -33,9 +33,6 @@ fn default_correlation_length_ratio() -> f32 {
 fn default_block_ms() -> f32 {
     200.0
 }
-fn default_harmonic_gains() -> Vec<f32> {
-    vec![1.0; crate::dsp::DEFAULT_NUM_HARMONICS]
-}
 fn default_f0_method() -> String {
     "yin".to_string()
 }
@@ -120,10 +117,6 @@ pub enum SavedNode {
         #[serde(default)]
         use_fixed_pitch: bool,
         formant_semitones: f32,
-        #[serde(default = "default_harmonic_gains")]
-        harmonic_gains: Vec<f32>,
-        #[serde(default)]
-        use_harmonic_gains: bool,
         #[serde(default = "default_f0_method")]
         f0_method: String,
         #[serde(default = "default_block_ms")]
@@ -252,9 +245,6 @@ impl ProjectFile {
                     use_fixed_pitch: n.pitch_ui_mode
                         == crate::nodes::effects::PitchUIMode::Fixed,
                     formant_semitones: n.formant_semitones,
-                    harmonic_gains: n.harmonic_gains.clone(),
-                    use_harmonic_gains: n.spectral_mode
-                        == crate::nodes::effects::SpectralMode::HarmonicGains,
                     f0_method: match n.f0_method {
                         crate::dsp::F0Method::Yin => "yin",
                         crate::dsp::F0Method::Dio => "dio",
@@ -420,8 +410,6 @@ impl ProjectFile {
                     fixed_pitch_hz,
                     use_fixed_pitch,
                     formant_semitones,
-                    harmonic_gains,
-                    use_harmonic_gains,
                     f0_method,
                     block_ms,
                 } => {
@@ -434,18 +422,10 @@ impl ProjectFile {
                         crate::nodes::effects::PitchUIMode::Shift
                     };
                     node.formant_semitones = *formant_semitones;
-                    if !harmonic_gains.is_empty() {
-                        node.harmonic_gains = harmonic_gains.clone();
-                    }
                     node.f0_method = match f0_method.as_str() {
                         "dio" => crate::dsp::F0Method::Dio,
                         "harvest" => crate::dsp::F0Method::Harvest,
                         _ => crate::dsp::F0Method::Yin,
-                    };
-                    node.spectral_mode = if *use_harmonic_gains {
-                        crate::nodes::effects::SpectralMode::HarmonicGains
-                    } else {
-                        crate::nodes::effects::SpectralMode::FormantShift
                     };
                     node.block_ms = *block_ms;
                     // ブロックサイズをボコーダーに反映

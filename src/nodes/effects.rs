@@ -400,16 +400,6 @@ impl NodeUI for WsolaPitchShiftNode {
 // WorldVocoderNode - WORLD声質変換
 // ============================================================================
 
-/// スペクトル操作モード
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SpectralMode {
-    /// フォルマントシフト（半音単位で一律シフト）
-    FormantShift,
-    /// 倍音振幅制御（各倍音の係数を個別調整）
-    HarmonicGains,
-}
-
-/// WORLDアルゴリズムベースの声質変換ノード
 /// ピッチ操作UIモード
 #[derive(Clone, Copy, PartialEq)]
 pub enum PitchUIMode {
@@ -426,12 +416,8 @@ pub struct WorldVocoderNode {
     pub pitch_semitones: f32,
     /// 固定ピッチ（Hz、0=無声音）
     pub fixed_pitch_hz: f32,
-    /// スペクトル操作モード
-    pub spectral_mode: SpectralMode,
-    /// フォルマントシフト量（半音単位、FormantShiftモード用）
+    /// フォルマントシフト量（半音単位）
     pub formant_semitones: f32,
-    /// 倍音振幅係数（HarmonicGainsモード用）
-    pub harmonic_gains: Vec<f32>,
     /// F0推定アルゴリズム
     pub f0_method: crate::dsp::F0Method,
     /// ブロックサイズ（ミリ秒）
@@ -450,9 +436,7 @@ impl Clone for WorldVocoderNode {
             pitch_ui_mode: self.pitch_ui_mode,
             pitch_semitones: self.pitch_semitones,
             fixed_pitch_hz: self.fixed_pitch_hz,
-            spectral_mode: self.spectral_mode,
             formant_semitones: self.formant_semitones,
-            harmonic_gains: self.harmonic_gains.clone(),
             f0_method: self.f0_method,
             block_ms: self.block_ms,
             buffers: self.buffers.clone(),
@@ -472,9 +456,7 @@ impl WorldVocoderNode {
             pitch_ui_mode: PitchUIMode::Shift,
             pitch_semitones: 0.0,
             fixed_pitch_hz: 200.0,
-            spectral_mode: SpectralMode::FormantShift,
             formant_semitones: 0.0,
-            harmonic_gains: vec![1.0; crate::dsp::DEFAULT_NUM_HARMONICS],
             f0_method: crate::dsp::F0Method::Yin,
             block_ms: default_block_ms,
             buffers: NodeBuffers::single_output(),
@@ -535,39 +517,12 @@ impl NodeUI for WorldVocoderNode {
 
             ui.separator();
 
-            // スペクトル操作モード切替
-            ui.horizontal(|ui| {
-                ui.label("Spectral:");
-                ui.selectable_value(
-                    &mut self.spectral_mode,
-                    SpectralMode::FormantShift,
-                    "Shift",
-                );
-                ui.selectable_value(
-                    &mut self.spectral_mode,
-                    SpectralMode::HarmonicGains,
-                    "Harmonics",
-                );
-            });
-
-            match self.spectral_mode {
-                SpectralMode::FormantShift => {
-                    ui.add(
-                        egui::Slider::new(&mut self.formant_semitones, -24.0..=24.0)
-                            .suffix(" st")
-                            .fixed_decimals(1),
-                    );
-                }
-                SpectralMode::HarmonicGains => {
-                    for i in 0..self.harmonic_gains.len() {
-                        ui.add(
-                            egui::Slider::new(&mut self.harmonic_gains[i], 0.0..=3.0)
-                                .text(format!("H{}", i + 1))
-                                .fixed_decimals(2),
-                        );
-                    }
-                }
-            }
+            ui.label("Formant Shift:");
+            ui.add(
+                egui::Slider::new(&mut self.formant_semitones, -24.0..=24.0)
+                    .suffix(" st")
+                    .fixed_decimals(1),
+            );
 
             ui.separator();
 
@@ -612,9 +567,6 @@ impl NodeUI for WorldVocoderNode {
                 self.pitch_semitones = 0.0;
                 self.fixed_pitch_hz = 200.0;
                 self.formant_semitones = 0.0;
-                for g in &mut self.harmonic_gains {
-                    *g = 1.0;
-                }
             }
         });
     }
